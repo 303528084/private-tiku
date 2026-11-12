@@ -140,6 +140,18 @@ docker compose exec tiku python -c "import sqlite3;s=sqlite3.connect('/app/data/
 **迁移到新机器**：停容器 → 整体拷贝 `data/` 与 `docker-compose.yml`、`.env` →
 新机器上照第 2、3 节登录并 `docker compose up -d` 即可。
 
+**定时备份工具**：仓库新增 `backend/scripts/backup_db.py`，零依赖、可**单独复制**到本部署目录
+运行（SQLite 在线备份 + 自动 `PRAGMA integrity_check`，另支持校验 / 列举 / 按份数清理）：
+
+```bash
+cd /vol1/1000/docker/private-tiku
+python3 backup_db.py --data-dir ./data --backup-dir ../backups --prune --keep 7
+python3 backup_db.py --verify ../backups/tiku-20260101-020000.db
+```
+
+备份输出务必放在 `data/` **之外**（`data/` 是容器挂载卷，同卷等于没备份），不要放同步盘；
+用 fnOS「计划任务」每天定时调用即可。恢复步骤与演练要求见仓库根 `README.md` §10。
+
 ---
 
 ## 7. 常见问题

@@ -347,3 +347,114 @@ docker run -d -p 8000:8000 -v "$PWD/data:/app/data" <你的DockerHub用户名>/p
 `platforms` 改为 `linux/amd64,linux/arm64`，代价是构建时间与镜像体积约翻倍，
 且不能再 `load` 到本地做容器自检（需改为直接 push 后 `docker pull` 验证）。
 
+---
+
+## 10. 备份与恢复
+
+题库数据（SQLite 库 + 上传原文件）是项目里**唯一不可重建的资产**：源码、镜像、前端产物都能重新构建，
+导入过的题不能。仓库提供零依赖脚本 `backend/scripts/backup_db.py`，用 SQLite **在线备份**
+（`Connection.backup()`）替代直接复制主库 —— 主库是 WAL 模式，`cp tiku.db` 可能拿到不一致快照。
+脚本备份后会自动跑 `PRAGMA integrity_check`，并支持校验、列举、按份数清理。
+
+### 10.1 常用命令
+
+在仓库根 `private-tiku/` 下执行（脚本只用标准库，不需要装 `backend/requirements.txt`）：
+
+```bash
+# 一键备份：默认 data/tiku.db -> ./backups/tiku-YYYYmmdd-HHMMSS.db，并打印完整性校验结果
+python backend/scripts/backup_db.py
+
+# 连同上传原文件一起备份（生成 backups/uploads-<同一次时间戳>/）
+python backend/scripts/backup_db.py --include-uploads
+
+# 校验一份已有备份：完整性 + questions / import_files 行数
+python backend/scripts/backup_db.py --verify backups/tiku-20260101-020000.db
+
+# 按时间倒序列出所有备份（文件名 / 大小 / 修改时间）
+python backend/scripts/backup_db.py --list
+
+# 备份后保留最近 7 份（删除前会打印完整清单）
+python backend/scripts/backup_db.py --prune --keep 7
+
+# 机器可读输出，供定时任务 / 监控消费（stdout 只有 JSON）
+python backend/scripts/backup_db.py --json
+```
+
+默认路径：数据目录取环境变量 `TIKU_DATA_DIR`，否则 `./data`；备份目录是数据目录的**兄弟目录**
+`./backups`。两者都可用 `--data-dir` / `--backup-dir` 覆盖。完整参数见
+`python backend/scripts/backup_db.py --help`。
+
+### 10.2 定时备份
+
+**Linux / macOS（cron，每天 02:00）**：
+
+```bash
+0 2 * * * cd /srv/private-tiku && /usr/bin/python3 backend/scripts/backup_db.py --data-dir /srv/private-tiku/data --backup-dir /srv/backups/tiku --prune --keep 7 >> /var/log/tiku-backup.log 2>&1
+```
+
+**Windows 任务计划程序**：新建「基本任务」→ 每天 02:00 → 启动程序，填：
+
+| 项 | 值 |
+|---|---|
+| 程序/脚本 | `C:\Python313\python.exe` |
+| 添加参数 | `C:\path\to\private-tiku\backend\scripts\backup_db.py --data-dir C:\path\to\private-tiku\data --backup-dir D:\tiku-backups --prune --keep 7` |
+| 起始于 | `C:\path\to\private-tiku` |
+
+等价的一条命令行（管理员 CMD，可直接改用）：
+
+```powershell
+schtasks /Create /TN "tiku-backup" /SC DAILY /ST 02:00 /TR "python.exe C:\path\to\private-tiku\backend\scripts\backup_db.py --data-dir C:\path\to\private-tiku\data --backup-dir D:\tiku-backups --prune --keep 7"
+```
+
+**fnOS / NAS 计划任务**：脚本零依赖、不引用任何项目模块，可**单独复制**到部署目录
+（那里只有 compose 文件、没有源码）运行，输出放到 `data/` 之外：
+
+```bash
+cd /vol1/1000/docker/private-tiku && python3 backup_db.py --data-dir ./data --backup-dir ../backups --prune --keep 7 --json >> ../backups/backup.log 2>&1
+```
+
+### 10.3 恢复步骤
+
+恢复会**覆盖当前库**，务必按顺序做（先留一份「恢复前」的库，防止选错备份版本后无法回退）：
+
+```bash
+# 1) 停服务 / 容器（Docker 部署）
+cd /vol1/1000/docker/private-tiku && docker compose stop
+#    本地开发则 Ctrl+C 停掉 uvicorn
+
+# 2) 把「当前的」库另存一份
+cp data/tiku.db ../backups/tiku-before-restore-$(date +%Y%m%d-%H%M%S).db
+
+# 3) 先校验要恢复的备份，再用它覆盖
+python3 backup_db.py --verify ../backups/tiku-20260101-020000.db
+cp ../backups/tiku-20260101-020000.db data/tiku.db
+
+# 4) 删除残留的 WAL / SHM：旧 WAL 会盖掉刚恢复的内容，必须删
+rm -f data/tiku.db-wal data/tiku.db-shm
+#    Windows：del data\tiku.db-wal data\tiku.db-shm
+
+# 5) 启动
+docker compose up -d
+
+# 6) 核对：健康检查 + 题数（与恢复前记录的数字比对）
+curl -s http://127.0.0.1:8000/api/health
+curl -s http://127.0.0.1:8000/api/stats
+```
+
+如需同时恢复上传原文件，把对应的 `backups/uploads-<时间戳>/` 内容拷回 `data/uploads/`。
+
+### 10.4 注意
+
+1. **备份不要放在 `data/` 内**：`data/` 是容器挂载卷，备份与数据同卷等于没备份；
+   也**不要放到 Moment / iCloud / OneDrive 等同步盘**，SQLite 被同步盘并发改写会破坏一致性、导致库损坏。
+   放到另一块盘、另一台机器或对象存储更稳妥。
+2. **脚本零依赖、可单独复制**：`backend/scripts/backup_db.py` 只用 Python 标准库，不 import
+   `app.*`，把这一个文件拷到 NAS 部署目录就能跑；清理（`--prune`）只删符合
+   `tiku-YYYYmmdd-HHMMSS.db` 命名的文件，你在备份目录里放的其它文件不会被删。
+   **单独复制到 NAS / 脱离项目目录运行时，必须显式传 `--data-dir`**：否则默认数据目录
+   会按脚本所在位置（`parents[2]`）推导而指错位置。
+3. **定期演练恢复**：没验证过的备份不算备份。建议每季度在临时目录按 §10.3 走一遍，
+   确认能起服务、`/api/health` 正常、题数对得上；演练本身不要碰生产 `data/`。
+
+> NAS 上的冷/热备份命令、迁移步骤与 Compose 相关说明见
+> [`deploy/fnos/README.md` §6「备份与迁移」](deploy/fnos/README.md)；本节是它的定时化与恢复演练补充。
