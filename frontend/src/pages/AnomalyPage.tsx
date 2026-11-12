@@ -17,6 +17,7 @@ import {
 import type { SelectChangeEvent } from '@mui/material';
 import { api, toErrorMessage } from '../api/client';
 import type { AnomalyListResult, AnomalyType } from '../api/client';
+import PageHeader from '../components/PageHeader';
 import QuestionCard from '../components/QuestionCard';
 import StatusChip from '../components/StatusChip';
 
@@ -84,12 +85,10 @@ export default function AnomalyPage(): JSX.Element {
 
   return (
     <Box>
-      <Typography variant="h5" sx={{ fontWeight: 700, mb: 0.5 }}>
-        异常校对
-      </Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        解析异常清单：可筛选类型、逐题查看并标记已处理；编辑题目后异常会自动重算。
-      </Typography>
+      <PageHeader
+        title="异常校对"
+        description="解析异常清单：可筛选类型、逐题查看并标记已处理；编辑题目后异常会自动重算。"
+      />
 
       <Paper variant="outlined" sx={{ p: 2, mb: 2, borderRadius: 2 }}>
         <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} alignItems={{ md: 'center' }}>

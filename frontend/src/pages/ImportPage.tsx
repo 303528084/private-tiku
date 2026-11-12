@@ -24,6 +24,7 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { api, toErrorMessage } from '../api/client';
 import type { ImportDetail, ImportRecord } from '../api/client';
+import PageHeader from '../components/PageHeader';
 import StatusChip from '../components/StatusChip';
 import UploadDropzone from '../components/UploadDropzone';
 import { MD_TEMPLATE, downloadMarkdownTemplate } from '../constants/import';
@@ -126,14 +127,16 @@ export default function ImportPage(): JSX.Element {
 
   return (
     <Box>
-      <Typography variant="h5" sx={{ fontWeight: 700, mb: 0.5 }}>
-        导入文档
-      </Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        上传后立即同步解析，解析结果先暂存为「待入库」，确认后才会进入检索库。
-        v1.3 起支持 <b>结构化 JSON</b> 与 <b>Markdown</b> 两种格式：JSON 多题库包会按题库分列来源，
-        一个 Markdown 文件 = 一个题库；系统导出的 md 可原样再导入。
-      </Typography>
+      <PageHeader
+        title="导入文档"
+        description={
+          <>
+            上传后立即同步解析，解析结果先暂存为「待入库」，确认后才会进入检索库。
+            v1.3 起支持 <b>结构化 JSON</b> 与 <b>Markdown</b> 两种格式：JSON 多题库包会按题库分列来源，
+            一个 Markdown 文件 = 一个题库；系统导出的 md 可原样再导入。
+          </>
+        }
+      />
 
       <details className="mb-4">
         <summary className="cursor-pointer text-sm text-gray-600 select-none">

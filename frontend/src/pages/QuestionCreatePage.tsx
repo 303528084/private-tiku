@@ -11,6 +11,7 @@ import { useNavigate } from 'react-router-dom';
 import { api, toErrorMessage } from '../api/client';
 import type { LibraryItem } from '../api/client';
 import { DEFAULT_LIBRARY_NAME, QTYPE_LABEL } from '../constants/import';
+import PageHeader from '../components/PageHeader';
 import QuestionForm, { emptyQuestionForm } from '../components/QuestionForm';
 import type { QuestionFormValue } from '../components/QuestionForm';
 import type { QuestionFormValidation } from '../utils/questionForm';
@@ -100,14 +101,10 @@ export default function QuestionCreatePage(): JSX.Element {
 
   return (
     <Box>
-      <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 2 }}>
-        <Typography variant="h6" sx={{ fontWeight: 700 }}>
-          手动录题
-        </Typography>
-        <Typography variant="caption" color="text.secondary">
-          保存即入库（published），可连续录入；答案支持点选填入
-        </Typography>
-      </Stack>
+      <PageHeader
+        title="手动录题"
+        description="保存即入库（published），可连续录入；答案支持点选填入"
+      />
 
       {error ? (
         <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>

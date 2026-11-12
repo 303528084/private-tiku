@@ -1,4 +1,4 @@
-/** 整体布局：侧边导航 + 顶部栏 + 内容区（含题库概览）。 */
+/** 整体布局：响应式侧边导航 + 顶部栏（面包屑/标语）+ 限宽内容区。 */
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link as RouterLink, useLocation } from 'react-router-dom';
@@ -7,13 +7,17 @@ import {
   Box,
   Divider,
   Drawer,
+  IconButton,
   List,
   ListItemButton,
   ListItemIcon,
   ListItemText,
   Toolbar,
   Typography,
+  useMediaQuery,
+  useTheme,
 } from '@mui/material';
+import MenuIcon from '@mui/icons-material/Menu';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import SearchIcon from '@mui/icons-material/Search';
 import ReportProblemIcon from '@mui/icons-material/ReportProblem';
@@ -24,6 +28,8 @@ import { api, toErrorMessage } from '../api/client';
 import type { StatsResult } from '../api/client';
 
 const DRAWER_WIDTH = 232;
+/** 题目/表格阅读行宽上限，避免宽屏一行过长。 */
+const CONTENT_MAX_WIDTH = 1200;
 
 interface NavItem {
   to: string;
@@ -39,15 +45,51 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/stats', label: '导入统计', icon: <BarChartIcon fontSize="small" /> },
 ];
 
+/**
+ * 顶栏面包屑的模块名：把路由路径映射为中文名。
+ *
+ * 注意 '/questions/new' 必须先于 '/questions/' 前缀判断，否则会误判为「题目详情」。
+ */
+function currentNavLabel(pathname: string): string {
+  if (pathname === '/') {
+    return '搜索题库';
+  }
+  if (pathname === '/questions/new') {
+    return '手动录题';
+  }
+  if (pathname.startsWith('/questions/')) {
+    return '题目详情';
+  }
+  if (pathname === '/import') {
+    return '导入文档';
+  }
+  if (pathname === '/anomalies') {
+    return '异常校对';
+  }
+  if (pathname === '/stats') {
+    return '导入统计';
+  }
+  return '题库';
+}
+
 export interface LayoutProps {
   children: ReactNode;
 }
 
 /** 布局组件。 */
 export default function Layout({ children }: LayoutProps): JSX.Element {
+  const theme = useTheme();
+  // md 断点（默认 900px）以下视为窄屏：侧栏改用临时抽屉 + 汉堡菜单。
+  const isMobile = useMediaQuery(theme.breakpoints.down('md'));
   const location = useLocation();
+  const [mobileOpen, setMobileOpen] = useState(false);
   const [stats, setStats] = useState<StatsResult | null>(null);
   const [statsError, setStatsError] = useState('');
+
+  // 路由切换后自动收起临时抽屉（桌面 permanent 抽屉始终展开，不受影响）。
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [location.pathname]);
 
   useEffect(() => {
     let active = true;
@@ -68,6 +110,14 @@ export default function Layout({ children }: LayoutProps): JSX.Element {
       active = false;
     };
   }, [location.pathname]);
+
+  const handleDrawerToggle = (): void => {
+    setMobileOpen((previous) => !previous);
+  };
+
+  const handleDrawerClose = (): void => {
+    setMobileOpen(false);
+  };
 
   const drawer = (
     <Box sx={{ width: DRAWER_WIDTH, height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -123,19 +173,46 @@ export default function Layout({ children }: LayoutProps): JSX.Element {
         position="fixed"
         color="inherit"
         elevation={0}
-        sx={{ width: `calc(100% - ${DRAWER_WIDTH}px)`, ml: `${DRAWER_WIDTH}px`, borderBottom: '1px solid #e6e9f0' }}
+        sx={{
+          width: isMobile ? '100%' : `calc(100% - ${DRAWER_WIDTH}px)`,
+          ml: isMobile ? 0 : `${DRAWER_WIDTH}px`,
+          borderBottom: '1px solid #e6e9f0',
+        }}
       >
-        <Toolbar variant="dense">
-          <Typography variant="subtitle2" color="text.secondary">
-            JSON / Markdown 导入 · 手动录题 · 规则解析 · 全文检索 · 异常校对 · 一键导出
+        <Toolbar variant="dense" sx={{ gap: 1 }}>
+          {isMobile ? (
+            <IconButton
+              size="small"
+              color="inherit"
+              aria-label="打开导航"
+              onClick={handleDrawerToggle}
+              sx={{ mr: 0.5 }}
+            >
+              <MenuIcon />
+            </IconButton>
+          ) : null}
+          <Typography variant="caption" color="text.secondary" noWrap>
+            私有护理题库 / {currentNavLabel(location.pathname)}
+          </Typography>
+          <Box sx={{ flexGrow: 1 }} />
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{ display: { xs: 'none', sm: 'block' } }}
+          >
+            JSON / Markdown 导入 · 手动录题 · 全文检索 · 异常校对
           </Typography>
         </Toolbar>
       </AppBar>
       <Drawer
-        variant="permanent"
+        variant={isMobile ? 'temporary' : 'permanent'}
+        open={isMobile ? mobileOpen : true}
+        onClose={handleDrawerClose}
+        ModalProps={{ keepMounted: true }}
         sx={{
-          width: DRAWER_WIDTH,
-          flexShrink: 0,
+          // permanent 抽屉是 flex 子项，需显式宽度占位；temporary 抽屉是 fixed Modal，
+          // 根节点不能限宽，否则遮罩只覆盖 232px、右侧点击无法关闭。
+          ...(isMobile ? {} : { width: DRAWER_WIDTH, flexShrink: 0 }),
           '& .MuiDrawer-paper': { width: DRAWER_WIDTH, boxSizing: 'border-box' },
         }}
       >
@@ -143,7 +220,9 @@ export default function Layout({ children }: LayoutProps): JSX.Element {
       </Drawer>
       <Box component="main" sx={{ flexGrow: 1, minWidth: 0, bgcolor: '#f5f7fb' }}>
         <Toolbar variant="dense" />
-        <Box sx={{ p: 3 }}>{children}</Box>
+        <Box sx={{ p: { xs: 2, sm: 3 }, width: '100%', maxWidth: CONTENT_MAX_WIDTH, mx: 'auto' }}>
+          {children}
+        </Box>
       </Box>
     </Box>
   );

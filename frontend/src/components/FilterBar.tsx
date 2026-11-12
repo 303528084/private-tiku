@@ -54,7 +54,7 @@ export default function FilterBar({
 
   return (
     <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} alignItems={{ md: 'center' }}>
-      <FormControl size="small" sx={{ minWidth: 140 }} disabled={disabled}>
+      <FormControl size="small" sx={{ width: { xs: '100%', sm: 160 } }} disabled={disabled}>
         <InputLabel id="filter-qtype-label">题型</InputLabel>
         <Select
           labelId="filter-qtype-label"
@@ -70,7 +70,7 @@ export default function FilterBar({
         </Select>
       </FormControl>
 
-      <FormControl size="small" sx={{ minWidth: 220 }} disabled={disabled}>
+      <FormControl size="small" sx={{ width: { xs: '100%', sm: 220 } }} disabled={disabled}>
         <TextField
           select
           size="small"

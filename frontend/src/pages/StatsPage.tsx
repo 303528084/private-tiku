@@ -8,7 +8,6 @@ import {
   CardContent,
   CircularProgress,
   Paper,
-  Stack,
   Table,
   TableBody,
   TableCell,
@@ -21,6 +20,7 @@ import DownloadIcon from '@mui/icons-material/Download';
 import { Link as RouterLink } from 'react-router-dom';
 import { api, toErrorMessage } from '../api/client';
 import type { ImportRecord, StatsResult } from '../api/client';
+import PageHeader from '../components/PageHeader';
 import StatusChip from '../components/StatusChip';
 
 interface StatCard {
@@ -66,27 +66,25 @@ export default function StatsPage(): JSX.Element {
 
   return (
     <Box>
-      <Stack direction="row" alignItems="center" sx={{ mb: 2 }}>
-        <Box sx={{ flexGrow: 1 }}>
-          <Typography variant="h5" sx={{ fontWeight: 700 }}>
-            导入统计
-          </Typography>
-          <Typography variant="body2" color="text.secondary">
-            题库总体规模、异常概况与按批次的导入明细。
-          </Typography>
-        </Box>
-        <Button
-          variant="outlined"
-          startIcon={<DownloadIcon />}
-          href={api.exportUrl('md')}
-          sx={{ mr: 1 }}
-        >
-          导出 Markdown
-        </Button>
-        <Button variant="contained" startIcon={<DownloadIcon />} href={api.exportUrl('json')}>
-          导出 JSON
-        </Button>
-      </Stack>
+      <PageHeader
+        title="导入统计"
+        description="题库总体规模、异常概况与按批次的导入明细。"
+        actions={
+          <>
+            <Button
+              variant="outlined"
+              startIcon={<DownloadIcon />}
+              href={api.exportUrl('md')}
+              sx={{ mr: 1 }}
+            >
+              导出 Markdown
+            </Button>
+            <Button variant="contained" startIcon={<DownloadIcon />} href={api.exportUrl('json')}>
+              导出 JSON
+            </Button>
+          </>
+        }
+      />
 
       {error ? (
         <Alert severity="error" sx={{ mb: 2 }}>
@@ -137,8 +135,8 @@ export default function StatsPage(): JSX.Element {
             刷新
           </Button>
         </Box>
-        <TableContainer>
-          <Table size="small">
+        <TableContainer sx={{ overflowX: 'auto' }}>
+          <Table size="small" sx={{ minWidth: 760 }}>
             <TableHead>
               <TableRow>
                 <TableCell>批次</TableCell>

@@ -17,6 +17,7 @@ import { api, toErrorMessage } from '../api/client';
 import type { SearchResult } from '../api/client';
 import FilterBar, { EMPTY_FILTERS } from '../components/FilterBar';
 import type { DocumentOption, SearchFilters } from '../components/FilterBar';
+import PageHeader from '../components/PageHeader';
 import QuestionCard from '../components/QuestionCard';
 
 const PAGE_SIZE = 10;
@@ -81,12 +82,10 @@ export default function SearchPage(): JSX.Element {
 
   return (
     <Box>
-      <Typography variant="h5" sx={{ fontWeight: 700, mb: 0.5 }}>
-        搜索题库
-      </Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        输入关键词（空格分隔多关键词），可检索题干、选项、答案与解析。
-      </Typography>
+      <PageHeader
+        title="搜索题库"
+        description="输入关键词（空格分隔多关键词），可检索题干、选项、答案与解析。"
+      />
 
       <Paper variant="outlined" sx={{ p: 2, mb: 2, borderRadius: 2 }}>
         <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.5} sx={{ mb: 2 }}>
@@ -102,25 +101,27 @@ export default function SearchPage(): JSX.Element {
               }
             }}
           />
-          <Button
-            variant="contained"
-            startIcon={<SearchIcon />}
-            onClick={() => void runSearch(1)}
-            disabled={loading}
-            sx={{ minWidth: 120 }}
-          >
-            搜索
-          </Button>
-          <Button
-            variant="outlined"
-            onClick={() => {
-              setKeyword('');
-              setFilters(EMPTY_FILTERS);
-              navigate('/');
-            }}
-          >
-            重置
-          </Button>
+          <Stack direction="row" spacing={1}>
+            <Button
+              variant="contained"
+              startIcon={<SearchIcon />}
+              onClick={() => void runSearch(1)}
+              disabled={loading}
+              sx={{ minWidth: 120 }}
+            >
+              搜索
+            </Button>
+            <Button
+              variant="outlined"
+              onClick={() => {
+                setKeyword('');
+                setFilters(EMPTY_FILTERS);
+                navigate('/');
+              }}
+            >
+              重置
+            </Button>
+          </Stack>
         </Stack>
         <FilterBar value={filters} onChange={setFilters} documents={documents} disabled={loading} />
       </Paper>

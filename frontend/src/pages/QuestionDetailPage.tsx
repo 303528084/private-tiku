@@ -145,11 +145,11 @@ export default function QuestionDetailPage(): JSX.Element {
 
   return (
     <Box>
-      <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+      <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }} flexWrap="wrap" useFlexGap>
         <IconButton size="small" onClick={() => navigate(-1)}>
           <ArrowBackIcon fontSize="small" />
         </IconButton>
-        <Typography variant="h6" sx={{ fontWeight: 700 }}>
+        <Typography variant="h5" sx={{ fontWeight: 700 }}>
           题目 #{detail.question.id}
         </Typography>
         <StatusChip kind="qtype" value={detail.question.qtype} />
