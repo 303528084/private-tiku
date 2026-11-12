@@ -486,3 +486,43 @@ def test_analysis_stops_at_horizontal_rule() -> None:
     parsed = markdown.parse_bank(text, "x.md").questions[0]
     assert parsed.analysis == "正常解析第一行"
     assert "版式尾巴" not in parsed.analysis
+
+
+def test_multiple_answer_lines_in_one_block_emit_hint() -> None:
+    """同一题块内出现 2 条答案行 → 追加提示类 parse_error，题目仍照常入库。
+
+    第 2 条答案行通常意味着漏写 ``## `` 标题、两题被合成一块；解析层仍只取
+    第一条答案（原行为不变），但不再静默，改由 validator 转出 ``parse_error``。
+    """
+    merged = (
+        "## 1. [单选题]\n\n"
+        "第一题题干内容足够长?\n\n"
+        "- **A.** 甲\n- **B.** 乙\n- **C.** 丙\n- **D.** 丁\n\n"
+        "**答案**：A\n\n"
+        "第二题题干被误并入同一块（漏写 ## 标题）\n\n"
+        "**答案**：B\n"
+    )
+    part = pipeline._bank_part(markdown.parse_bank(merged, BANK_NAME))
+    assert part.question_count == 1
+
+    item = part.items[0]
+    assert item.parsed.parse_error is True
+    assert item.parsed.answer == "A"  # 「只取第一条答案」的原有行为未变
+    kinds = [anomaly.type for anomaly in item.anomalies]
+    assert "parse_error" in kinds
+    details = [anomaly.detail for anomaly in item.anomalies if anomaly.type == "parse_error"]
+    assert len(details) == 1
+    assert "答案行" in details[0]
+    assert "## 标题" in details[0]
+
+    healthy = (
+        "## 1. [单选题]\n\n"
+        "第一题题干内容足够长?\n\n"
+        "- **A.** 甲\n- **B.** 乙\n- **C.** 丙\n- **D.** 丁\n\n"
+        "**答案**：A\n"
+    )
+    healthy_part = pipeline._bank_part(markdown.parse_bank(healthy, BANK_NAME))
+    assert healthy_part.question_count == 1
+    assert healthy_part.items[0].parsed.parse_error is False
+    assert healthy_part.items[0].parsed.answer == "A"
+    assert healthy_part.items[0].anomalies == []  # 单条答案行的健康块不得误报

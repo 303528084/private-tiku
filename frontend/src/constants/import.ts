@@ -35,18 +35,30 @@ export const MD_TEMPLATE_FILENAME = 'tiku-template.md';
  * 否则前端预拦截与后端兜底会出现两种说法。模板字面量里的插值名 ext 会被
  * backend/app/tests/test_text_parity.py 逐字扫描，改动时必须同步后端并跑该用例。
  *
- * 入参规范化（与后端 config.unsupported_ext_message() 同口径）：
+ * 入参规范化（本函数的前端实现）：
  * - 先去首尾空白并转小写（大小写不敏感）；
- * - 传文件名（含点，如 "old.DOCX"）时自动取后缀 ".docx"，取不到后缀则回退原串；
- * - 传裸后缀（如 "docx"）时原样使用，并自动补前导点（"docx" → ".docx"）；
+ * - 含点串按文件名处理，取最后一段后缀："old.DOCX" → ".docx"；
+ * - 裸后缀（如 "docx"）原样使用，并自动补前导点（"docx" → ".docx"）；
+ * - 后缀取不到（"a." / ".." / "." 只会得到 "."）时回退为原串，再按需补点，
+ *   得到 ".a." / ".." / "."，与后端 config.unsupported_ext_message() 一致；
  * - 空值（或全空白）显示「未知」。
+ *
+ * 前后端口径差异（务必注意）：
+ * - 后端 config.unsupported_ext_message() 对含点串只做「小写 + 补前导点」，
+ *   不取后缀：同一个 "old.DOCX"，后端给出「.old.docx」，前端给出「.docx」；
+ * - 真实调用方 frontend/src/components/UploadDropzone.tsx 传入的是
+ *   fileExt(file.name) || file.name，即已归一化的 ".ext"（无后缀文件名才回退全名），
+ *   在这条真实链路上两种实现逐字一致，用户不会看到两种说法；
+ * - backend/app/tests/test_text_parity.py 的
+ *   test_filename_input_normalization_contract 会静态钉住上述差异与调用约定。
  *
  * @param ext 扩展名（".docx" / "docx"）或文件名（"old.DOCX"），大小写不敏感。
  * @returns 可直接展示给用户的提示文案。
  */
 export function unsupportedExtMessage(ext: string): string {
   const raw = (ext || '').trim().toLowerCase();
-  let suffix = raw.includes('.') ? fileExt(raw) || raw : raw;
+  const extracted = raw.includes('.') ? fileExt(raw) : '';
+  let suffix = extracted && extracted !== '.' ? extracted : raw;
   if (!suffix) {
     suffix = '未知';
   } else if (!suffix.startsWith('.')) {

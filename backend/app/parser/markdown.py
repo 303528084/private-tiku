@@ -123,6 +123,8 @@ class _Draft:
     last_letter: Optional[str] = None
     saw_content: bool = False
     """是否出现过任何有效内容行（用于区分「空题目块」与「合法空题干」）。"""
+    answer_line_count: int = 0
+    """同一题块内匹配到的答案行数（>1 时提示疑似漏写 ## 标题导致两题合并）。"""
 
 
 # ---------------------------------------------------------------------------
@@ -228,8 +230,11 @@ def parse_bank(text: str, name: str) -> jsonbank.RawBank:
             continue
 
         # 6) 答案行：只取第一条（后续「答案：」行不覆盖已识别答案）
+        #    同时统计答案行数：同一题块出现多条答案行通常是漏写 ## 标题、两题被
+        #    合成一块，只取第一条会静默丢弃后题答案，故结算时按计数给出提示。
         matched_answer = MD_ANSWER_RE.match(line)
         if matched_answer:
+            draft.answer_line_count += 1
             tail = (matched_answer.group("v") or "").strip()
             if tail and not draft.answer_raw:
                 draft.answer_raw = tail
@@ -347,6 +352,16 @@ def _finalize(draft: _Draft, fallback_no: int) -> Parsed:
     if qtype == "judge":
         options, candidate = jsonbank.fold_judge_options(options, candidate)
 
+    # 同一题块出现多条答案行：只取第一条是刻意设计，但通常意味着漏写 ## 标题、
+    # 两题被合成一块。题目照常入库（提示类、不阻断），仅追加一条 parse_error。
+    multiple_answers = draft.answer_line_count > 1
+    error_detail = ""
+    if multiple_answers:
+        error_detail = (
+            f"第 {draft.heading_line} 行起的题目块内出现 {draft.answer_line_count} 条答案行，"
+            "仅保留第一条；疑似漏写 ## 标题导致两题合并，请人工核对题数"
+        )
+
     return Parsed(
         no=no,
         stem=stem,
@@ -354,6 +369,8 @@ def _finalize(draft: _Draft, fallback_no: int) -> Parsed:
         answer=normalize_answer(candidate, qtype),
         analysis=analysis,
         qtype=qtype,
+        parse_error=multiple_answers,
+        error_detail=error_detail,
     )
 
 

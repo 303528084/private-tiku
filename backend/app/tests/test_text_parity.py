@@ -94,3 +94,35 @@ def test_backend_template_only_mentions_supported_formats() -> None:
     assert ".json" in message and ".md" in message
     assert "「.docx」" in message  # 扩展名自动补点并加引号
     assert config.unsupported_ext_message(".markdown").startswith("不支持的文件类型「.markdown」")
+
+
+def test_filename_input_normalization_contract() -> None:
+    """「文件名入参」前后端口径约定：钉住差异 + 证明真实链路安全。
+
+    后端 ``config.unsupported_ext_message()`` 对含点串只做「小写 + 补前导点」、
+    **不取后缀**；前端 ``constants/import.ts::unsupportedExtMessage()`` 会把含点
+    串当文件名取后缀。两者对同一个全名会给出不同文案，本用例把这一差异钉住，
+    同时静态证明真实调用方传入的是已归一化的 ``.ext``，故用户可见文案始终逐字
+    一致 —— 防止将来调用方改成传全名时出现两种说法。
+    """
+    # 1) 后端：含点串只补点、不取后缀
+    assert "「.old.docx」" in config.unsupported_ext_message("old.DOCX")
+    # 2) 裸后缀 / 带点后缀 / 带空白三种归一化输入，前后端口径一致
+    assert (
+        config.unsupported_ext_message(".docx")
+        == config.unsupported_ext_message("docx")
+        == config.unsupported_ext_message(" DOCX ")
+    )
+    # 3) 真实链路：调用方传的是已归一化后缀，而非文件全名
+    dropzone = FRONTEND_CONSTANTS.parent.parent / "components" / "UploadDropzone.tsx"
+    assert dropzone.is_file(), f"前端上传组件缺失：{dropzone}"
+    dropzone_source = dropzone.read_text(encoding="utf-8")
+    assert "unsupportedExtMessage(fileExt(file.name) || file.name)" in dropzone_source
+    # 4) 前端函数体确实具备「取后缀」能力（差异来源），且仍复用 fileExt
+    constants_source = _read_frontend_source()
+    function_re = re.compile(
+        r"export function unsupportedExtMessage[^{]*\{(?P<body>.*?)\n\}", re.S
+    )
+    matched = function_re.search(constants_source)
+    assert matched is not None, "前端未声明 unsupportedExtMessage 函数"
+    assert "fileExt(" in matched.group("body")
