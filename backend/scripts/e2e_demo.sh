@@ -19,8 +19,8 @@ BASE="http://127.0.0.1:${PORT}"
 WORK=".e2e-run"
 LOGFILE="${WORK}/uvicorn.log"
 DATA_DIR="${WORK}/data"
-DIRTY="${WORK}/in/dirty_basic.txt"
-MESSY="${WORK}/in/no_number.txt"
+DIRTY="${WORK}/in/dirty_basic.md"
+BAD="${WORK}/in/no_heading.md"
 
 PASS=0
 FAIL=0
@@ -59,49 +59,72 @@ check() {
 }
 
 # ---------------------------------------------------------------------------
-# 造一份「带病」文档：缺答案 / 缺选项 / 选项不足 / 无题干 / 题号重复
+# 造一份「带病」Markdown：缺答案 / 缺选项 / 选项不足 / 无题干
 # ---------------------------------------------------------------------------
-cat > "$DIRTY" <<'TXT'
-护理学基础（现场演示用脏数据）
+cat > "$DIRTY" <<'MD'
+# 护理学基础（现场演示用脏数据）
 
-1. 脉搏短绌常见于哪种心律失常?
-A. 房颤
-B. 室颤
-C. 房扑
-D. 期前收缩
+## 1. [单选题]
 
-2. 青霉素过敏性休克首选药物是?
-答案：A
+脉搏短绌常见于哪种心律失常?
 
-3. 口腔护理的目的包括?
-A. 保持口腔清洁
-B. 预防口腔感染
-答案：AB
+- **A.** 甲
+- **B.** 乙
+- **C.** 丙
+- **D.** 丁
 
-4.
-A. 甲
-B. 乙
-C. 丙
-D. 丁
-答案：A
+**答案**：（无答案）
 
-5. 大量不保留灌肠液面距肛门高度为?
-A. 20～30cm
-B. 40～60cm
-C. 70～80cm
-D. 90cm以上
-答案：B
+## 2. [单选题]
 
-5. 氧气筒内氧气可用尽后再更换。
-答案：错
-TXT
+青霉素过敏性休克首选药物是?
 
-cat > "$MESSY" <<'TXT'
-这份稿件的题号在转换过程中全部丢失了。
+**答案**：A
+
+## 3. [多选题]
+
+口腔护理的目的包括?
+
+- **A.** 保持口腔清洁
+- **B.** 预防口腔感染
+
+**答案**：AB
+
+## 4. [单选题]
+
+查
+
+- **A.** 甲
+- **B.** 乙
+- **C.** 丙
+- **D.** 丁
+
+**答案**：A
+
+## 5. [单选题]
+
+大量不保留灌肠液面距肛门高度为?
+
+- **A.** 20~30cm
+- **B.** 40~60cm
+- **C.** 70~80cm
+- **D.** 90cm以上
+
+**答案**：B
+
+## 6. [判断题]
+
+氧气筒内氧气可用尽后再更换。
+
+**答案**：×
+MD
+
+cat > "$BAD" <<'MD'
+这份稿件的题目标题（## ）在转换过程中全部丢失了。
 
 无菌技术操作原则包括哪些？
 铺备用床的目的是什么？
-TXT
+MD
 
 echo "=================================================================="
 echo " 私有护理题库 · 端到端演示（上传 → 异常 → 校对 → 入库 → 导出）"
@@ -128,18 +151,19 @@ check "FTS5 trigram 可用" "$HEALTH" '"fts_trigram":true'
 
 # ---------------------------------------------------------------------------
 echo
-echo "[2/9] 上传 2 个文件（1 份脏数据 + 1 份无题号稿）→ 解析并暂存"
+echo "[2/9] 上传 2 个文件（1 份脏 md + 1 份缺标题的坏 md）→ 解析并暂存"
 # ---------------------------------------------------------------------------
 UPLOAD="$(curl -s -X POST "${BASE}/api/imports" \
   -F "files[]=@${DIRTY}" \
-  -F "files[]=@${MESSY}")"
+  -F "files[]=@${BAD}")"
 echo "  → $(printf '%s' "$UPLOAD" | head -c 460)"
-check "上传成功" "$UPLOAD" '"code":0'
+check "上传成功（部分成功也返回 code=0）" "$UPLOAD" '"code":0'
 IMPORT_ID="$(printf '%s' "$UPLOAD" | jget "d['data']['import_id']")"
 ANOM_TOTAL="$(printf '%s' "$UPLOAD" | jget "sum(f['anomaly_count'] for f in d['data']['files'])")"
 echo "  import_id=${IMPORT_ID}  解析出的异常总数=${ANOM_TOTAL}"
 check "脏数据文件解析成功" "$UPLOAD" '"status":"parsed"'
-check "已识别出异常（>=5 条）" "$(printf '%s' "$ANOM_TOTAL" | grep -E '^([5-9]|[1-9][0-9]+)$' || echo no)" '^[0-9]'
+check "已识别出异常（>=4 条）" "$(printf '%s' "$ANOM_TOTAL" | grep -E '^([4-9]|[1-9][0-9]+)$' || echo no)" '^[0-9]'
+check "坏 md 被拒并给出定位到行的原因" "$UPLOAD" '未找到题目标题'
 
 # ---------------------------------------------------------------------------
 echo
@@ -149,11 +173,12 @@ DETAIL="$(curl -s "${BASE}/api/imports/${IMPORT_ID}")"
 echo "  → $(printf '%s' "$DETAIL" | jget "d['data']['import']")"
 echo "    文件明细：$(printf '%s' "$DETAIL" | jget "[(f['filename'], f['total_questions'], f['anomaly_count'], f['status'], f['error'][:18]) for f in d['data']['files']]")"
 check "批次待确认" "$DETAIL" '"status":"pending_confirm"'
-check "无题号文件被兜底切成 1 块（交由 parse_error 标记）" "$DETAIL" '"total_questions":1'
+check "坏文件单独列为 failed 且带原因" "$DETAIL" '"status":"failed"'
+check "坏文件保留 0 题记录便于溯源" "$DETAIL" '"total_questions":0'
 
 # ---------------------------------------------------------------------------
 echo
-echo "[4/9] 打开异常清单（诱导出的 5 类异常）"
+echo "[4/9] 打开异常清单（诱导出的 4 类异常）"
 # ---------------------------------------------------------------------------
 ANOM="$(curl -s --get "${BASE}/api/anomalies" --data-urlencode "handled=0" --data-urlencode "size=20")"
 echo "  → summary=$(printf '%s' "$ANOM" | jget "d['data']['summary']")  total=$(printf '%s' "$ANOM" | jget "d['data']['total']")"
@@ -162,7 +187,6 @@ check "缺答案 missing_answer" "$ANOM" 'missing_answer'
 check "缺选项 missing_options" "$ANOM" 'missing_options'
 check "选项不足 too_few_options" "$ANOM" 'too_few_options'
 check "无题干 empty_stem" "$ANOM" 'empty_stem'
-check "题号重复 duplicate_number" "$ANOM" 'duplicate_number'
 
 # 只挑「有题号」的那道缺答案题（无题号稿产生的是 parse_error 伪题）
 MISSING_ANOM_ID="$(printf '%s' "$ANOM" | jget "[i['anomaly']['id'] for i in d['data']['items'] if i['anomaly']['type']=='missing_answer' and i['question']['question_no']=='1'][0]")"
@@ -186,15 +210,23 @@ check "修复后异常已清空" "$FIXED" '"anomalies":\[\]'
 
 # ---------------------------------------------------------------------------
 echo
-echo "[6/9] 把「题号重复」中的一条标记为已处理（PATCH）"
+echo "[6/9] 手动录题（POST /api/questions）并查看题库下拉（GET /api/libraries）"
 # ---------------------------------------------------------------------------
-DUP_ANOM_ID="$(printf '%s' "$ANOM" | jget "[i['anomaly']['id'] for i in d['data']['items'] if i['anomaly']['type']=='duplicate_number'][0]")"
-PATCHED="$(curl -s -X PATCH "${BASE}/api/anomalies/${DUP_ANOM_ID}" \
-  -H 'Content-Type: application/json' -d '{"handled":true}')"
-echo "  → ${PATCHED}"
-check "标记已处理成功" "$PATCHED" '"handled":1'
-AFTER_SUMMARY="$(curl -s --get "${BASE}/api/anomalies" --data-urlencode "handled=0" | jget "d['data']['summary']")"
-echo "  未处理异常 summary → ${AFTER_SUMMARY}"
+CREATED="$(curl -s -X POST "${BASE}/api/questions" \
+  -H 'Content-Type: application/json' \
+  -d '{"stem":"患者男，65 岁，突发胸痛 2 小时，心电图提示 ST 段抬高。","options":{"A":"急性心肌梗死","B":"心绞痛","C":"肺栓塞","D":"主动脉夹层"},"answer":"A","analysis":"ST 段抬高提示透壁性心肌缺血。","qtype":"single","library_name":"手动录入"}')"
+echo "  → $(printf '%s' "$CREATED" | head -c 460)"
+check "手录成功 code=0" "$CREATED" '"code":0'
+check "手录题直接 published" "$CREATED" '"status":"published"'
+check "手录来源=题库名称" "$CREATED" '"name":"手动录入"'
+NEW_QID="$(printf '%s' "$CREATED" | jget "d['data']['question']['id']")"
+NEW_NO="$(printf '%s' "$CREATED" | jget "d['data']['question']['question_no']")"
+echo "  新题 question_id=${NEW_QID}  题号=${NEW_NO}（留空自动取 1）"
+
+LIBS="$(curl -s "${BASE}/api/libraries")"
+echo "  → $(printf '%s' "$LIBS" | head -c 320)"
+check "题库下拉含手录库" "$LIBS" '"kind":"manual"'
+check "题库下拉含本次 md 导入来源" "$LIBS" '"kind":"md"'
 
 # ---------------------------------------------------------------------------
 echo

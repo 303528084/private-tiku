@@ -5,12 +5,13 @@
 # 因此这里改为「下限 + 主版本上限」的约束：既能在本机 Python 3.13 上直接
 # 二进制安装，也能在容器 Python 3.11 上得到等价可用的版本组合。
 # 需要完全可复现的构建请使用 `pip freeze > requirements.lock.txt`。
+#
+# v1.3：导入格式收敛为 JSON + Markdown，移除 python-docx / pdfplumber；
+# chardet 保留，用于 Markdown 与 JSON 的编码探测兜底（GBK/UTF-16 手写稿常见）。
 
 fastapi>=0.115,<1.0
 uvicorn[standard]>=0.30,<1.0
 python-multipart>=0.0.9
-python-docx>=1.1,<2.0
-pdfplumber>=0.11,<1.0
 chardet>=5.2,<6.0
 pydantic>=2.9,<3.0
 pytest>=8.2,<9.0

@@ -1,17 +1,17 @@
-"""文本规范化：全角→半角、去首尾空白、压缩连续空白、丢弃空行、统一标点。
+"""文本规范化：全角→半角、去首尾空白、压缩连续空白、统一标点。
 
 说明：U+FF01–U+FF5E 区间（全角 ASCII）统一偏移 -0xFEE0 转为半角，
 因此 ``Ａ`` → ``A``、``．`` → ``.``、``：`` → ``:``、``（`` → ``(`` 都会被一次处理。
 中文句号 ``。`` 保留原样（不转成 ``.``，避免题干被误认为题号行），
-切分/选项/答案的正则字符类中同时容纳了全角与半角标点。
+选项/答案/解析的正则字符类中同时容纳了全角与半角标点。
+
+v1.3 起只保留单行规范化 ``normalize_text()``：整文件行序列的 ``normalize(lines)``
+随文本类读取层一并下线（Markdown 解析器逐行调用本函数）。
 """
 
 from __future__ import annotations
 
 import re
-from typing import Iterable, List
-
-from .reader import Line
 
 _FULLWIDTH_START = 0xFF01
 _FULLWIDTH_END = 0xFF5E
@@ -35,7 +35,6 @@ _EXTRA_MAP: dict[str, str] = {
 }
 
 _WHITESPACE_RE = re.compile(r"[ \t]{2,}")
-_TRAILING_PUNCT_RE = re.compile(r"[\s\u3000]+$")
 
 
 def _convert_char(char: str) -> str:
@@ -56,14 +55,3 @@ def normalize_text(text: str) -> str:
     converted = "".join(_convert_char(char) for char in text)
     collapsed = _WHITESPACE_RE.sub(" ", converted)
     return collapsed.strip()
-
-
-def normalize(lines: Iterable[Line]) -> List[Line]:
-    """规范化整个文件的行序列，丢弃空行并保持原顺序。"""
-    result: List[Line] = []
-    for line in lines:
-        text = normalize_text(line.text)
-        if not text:
-            continue
-        result.append(Line(seq=line.seq, text=text, page=line.page))
-    return result

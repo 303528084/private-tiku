@@ -1,28 +1,24 @@
-"""第 2 轮回归测试（T05-R2）：D1/D2/D3/D4/D5 修复的独立复核 + 边界探针。
+"""第 2 轮回归测试（T05-R2）：D1/D2/D4 修复的独立复核 + 边界探针。
 
-本文件取代第 1 轮的 ``test_known_issues.py``。第 2 轮发现的 D4（FTS/LIKE 双路径
-对含引号检索词结果不一致）已在 v1.1.1 修复，故 **全部用例均为正式用例，无 xfail**。
+v1.3 变更：全部样本由 ``*.txt`` 改写为等价的 ``*.md``（题量、答案、异常数不变），
+纯文本切分行为（括号题号 / 第N题 / 同块多答案行）随 DOCX/TXT/PDF 管线下线一并
+删除，其等价覆盖由 ``test_markdown.py`` 承担。
 
 约定：
-* 所有期望值由我自己构造的样本推导（不依赖 ``scripts/accuracy_check.py`` 的结论）；
+* 所有期望值由我自己构造的样本推导（不依赖任何外部「准确率」脚本的结论）；
 * 每个用例独立 ``tmp_path`` 数据库，不污染仓库 ``data/``。
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Iterator, List
+from typing import Any, Dict, Iterator
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app import config, db
-from app.api import search as search_module
 from app.main import app
-from app.parser.extractor import extract
-from app.parser.pipeline import run_lines
-from app.parser.reader import Line
-from app.parser.splitter import Block
 
 # ---------------------------------------------------------------------------
 # 夹具
@@ -43,7 +39,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClie
 
 def _upload(client: TestClient, name: str, text: str) -> Dict[str, Any]:
     response = client.post(
-        "/api/imports", files=[("files[]", (name, text.encode("utf-8"), "text/plain"))]
+        "/api/imports", files=[("files[]", (name, text.encode("utf-8"), "text/markdown"))]
     )
     body = response.json()
     assert body["code"] == 0, body
@@ -54,31 +50,50 @@ def _commit(client: TestClient, import_id: int) -> int:
     return int(client.post(f"/api/imports/{import_id}/commit").json()["data"]["committed"])
 
 
-def _lines(doc: str) -> List[Line]:
-    return [Line(seq=i, text=text, page=None) for i, text in enumerate(doc.split("\n"))]
+# 主样本：3 题（第 1 题缺答案 → 1 条异常；解析里埋了 % 与 _ 供通配符探针用）
+MAIN_MD = """# 主回归样本
 
+- 导出时间：2025-01-01 10:00:00
+- 题目总数：3
 
-# 主样本：2 题（第 1 题缺答案 → 1 条异常；解析里埋了 % 与 _ 供通配符探针用）
-MAIN_TXT = """1. 脉搏短绌常见于哪种心律失常?
-A. 房颤
-B. 室颤
-C. 房扑
-D. 期前收缩
-解析：发生率约100%，标记 a_b 用于测试通配符。
+## 1. [单选题]
 
-2. 无菌盘铺好后有效期为?
-A. 4小时
-B. 8小时
-C. 12小时
-D. 24小时
-答案：A
+脉搏短绌常见于哪种心律失常?
 
-3. 静脉输液发生空气栓塞时应立即采取的体位是?
-A. 左侧卧位并头低足高
-B. 右侧卧位
-C. 半坐卧位
-D. 平卧位
-答案：A
+- **A.** 房颤
+- **B.** 室颤
+- **C.** 房扑
+- **D.** 期前收缩
+
+**答案**：（无答案）
+
+**解析**：发生率约100%，标记 a_b 用于测试通配符。
+
+---
+
+## 2. [单选题]
+
+无菌盘铺好后有效期为?
+
+- **A.** 4小时
+- **B.** 8小时
+- **C.** 12小时
+- **D.** 24小时
+
+**答案**：A
+
+---
+
+## 3. [单选题]
+
+静脉输液发生空气栓塞时应立即采取的体位是?
+
+- **A.** 左侧卧位并头低足高
+- **B.** 右侧卧位
+- **C.** 半坐卧位
+- **D.** 平卧位
+
+**答案**：A
 """
 
 
@@ -103,7 +118,7 @@ def _snapshot(client: TestClient, import_id: int) -> Dict[str, Any]:
 
 def test_import_anomaly_counts_four_way_equality(client: TestClient) -> None:
     """D1：上传 → 修复唯一异常，四个视图的未处理异常数必须恒等。"""
-    payload = _upload(client, "main.txt", MAIN_TXT)
+    payload = _upload(client, "main.md", MAIN_MD)
     import_id = payload["import_id"]
     _commit(client, import_id)
 
@@ -144,7 +159,7 @@ def test_import_anomaly_counts_four_way_equality(client: TestClient) -> None:
 
 def test_handled_anomaly_counts_as_total_not_open(client: TestClient) -> None:
     """D1：标记已处理后 ``anomaly_count``（未处理）与 ``anomaly_total``（全部）语义必须分家。"""
-    payload = _upload(client, "main.txt", MAIN_TXT)
+    payload = _upload(client, "main.md", MAIN_MD)
     _commit(client, payload["import_id"])
 
     anomaly_id = int(
@@ -169,7 +184,7 @@ def test_handled_anomaly_counts_as_total_not_open(client: TestClient) -> None:
 
 def test_question_counts_rollback_after_deleting_question(client: TestClient) -> None:
     """D1：删题后批次与文件明细的 total_questions / committed_questions 必须回退。"""
-    payload = _upload(client, "main.txt", MAIN_TXT)
+    payload = _upload(client, "main.md", MAIN_MD)
     import_id = payload["import_id"]
     assert _commit(client, import_id) == 3
 
@@ -195,15 +210,42 @@ def test_question_counts_rollback_after_deleting_question(client: TestClient) ->
     assert after["batch_detail"]["anomaly_count"] == 1 == after["file"]["anomaly_count"]
 
 
+DIRTY_MD = """# 脏样本
+
+## 1. [单选题]
+
+缺答案的题?
+
+- **A.** 甲
+- **B.** 乙
+- **C.** 丙
+- **D.** 丁
+
+**答案**：（无答案）
+"""
+
+CLEAN_MD = """# 干净样本
+
+## 1. [单选题]
+
+正常题?
+
+- **A.** 甲
+- **B.** 乙
+- **C.** 丙
+- **D.** 丁
+
+**答案**：A
+"""
+
+
 def test_multi_file_batch_counts_are_summed_live(client: TestClient) -> None:
     """D1 补充：多文件批次的量必须等于各文件实时值之和（不是解析期快照）。"""
-    dirty = "1. 缺答案的题?\nA. 甲\nB. 乙\nC. 丙\nD. 丁\n"
-    clean = "1. 正常题?\nA. 甲\nB. 乙\nC. 丙\nD. 丁\n答案：A\n"
     response = client.post(
         "/api/imports",
         files=[
-            ("files[]", ("a.txt", dirty.encode("utf-8"), "text/plain")),
-            ("files[]", ("b.txt", clean.encode("utf-8"), "text/plain")),
+            ("files[]", ("a.md", DIRTY_MD.encode("utf-8"), "text/markdown")),
+            ("files[]", ("b.md", CLEAN_MD.encode("utf-8"), "text/markdown")),
         ],
     )
     payload = response.json()["data"]
@@ -213,179 +255,14 @@ def test_multi_file_batch_counts_are_summed_live(client: TestClient) -> None:
     detail = client.get(f"/api/imports/{import_id}").json()["data"]
     batch = detail["import"]
     files = {item["filename"]: item for item in detail["files"]}
-    assert batch["anomaly_count"] == files["a.txt"]["anomaly_count"] + files["b.txt"]["anomaly_count"]
+    assert batch["anomaly_count"] == files["a.md"]["anomaly_count"] + files["b.md"]["anomaly_count"]
     assert batch["anomaly_count"] == 1
-    assert files["a.txt"]["anomaly_count"] == 1
-    assert files["b.txt"]["anomaly_count"] == 0
+    assert files["a.md"]["anomaly_count"] == 1
+    assert files["b.md"]["anomaly_count"] == 0
     assert batch["total_questions"] == sum(item["total_questions"] for item in detail["files"]) == 2
     assert batch["committed_questions"] == 2
     assert client.get("/api/stats").json()["data"]["anomaly_open"] == 1
     assert client.get("/api/anomalies").json()["data"]["total"] == 1
-
-
-# ===========================================================================
-# D3：题号形态（括号 / 第N题 / 后缀式混合）+ 误判防护 + 答案取第一条
-# ===========================================================================
-MIXED_NUMBERING_TXT = """某某医院护理三基题库（第一章）
-
-（1）脉搏短绌常见于哪种心律失常?
-A. 房颤
-B. 室颤
-C. 房扑
-D. 期前收缩
-答案：A
-
-第2题. 无菌盘铺好后有效期为?
-A. 4小时
-B. 8小时
-C. 12小时
-D. 24小时
-答案：A
-
-第3题：铺备用床的主要目的是（  ）?
-A. 保持病室整洁
-B. 便于观察病情
-C. 预防压疮
-D. 便于实施治疗
-答案：A
-
-4. 氧气筒内氧气可用尽后再更换。
-答案：错
-"""
-
-
-def test_parenthesized_and_chapter_numbering_split() -> None:
-    """D3：括号编号、「第N题.」「第N题：」、后缀式四种形态混合必须切成 4 题。"""
-    result = run_lines(_lines(MIXED_NUMBERING_TXT))
-    assert result.block_count == 4
-    items = [item.parsed for item in result.items]
-
-    assert [item.no for item in items] == ["1", "2", "3", "4"]
-
-    # 每题四项逐一核对
-    assert items[0].stem == "脉搏短绌常见于哪种心律失常?"
-    assert items[0].options == {"A": "房颤", "B": "室颤", "C": "房扑", "D": "期前收缩"}
-    assert (items[0].answer, items[0].qtype) == ("A", "single")
-
-    assert items[1].stem == "无菌盘铺好后有效期为?"
-    assert list(items[1].options) == ["A", "B", "C", "D"]
-    assert (items[1].answer, items[1].qtype) == ("A", "single")
-
-    # 括号题号与题干内的填空括号 ( ) 共存：题干必须保留 ( )，且不被当作题号
-    assert items[2].stem == "铺备用床的主要目的是( )?"
-    assert items[2].options == {
-        "A": "保持病室整洁",
-        "B": "便于观察病情",
-        "C": "预防压疮",
-        "D": "便于实施治疗",
-    }
-    assert (items[2].answer, items[2].qtype) == ("A", "single")
-
-    assert items[3].stem == "氧气筒内氧气可用尽后再更换。"
-    assert items[3].options == {}
-    assert (items[3].answer, items[3].qtype) == ("×", "judge")
-
-    # 切分正确时不应出现任何 parse_error
-    assert all(
-        "parse_error" not in {a.type for a in item.anomalies} for item in result.items
-    )
-
-
-TRAP_TXT = """1. 下列（A）项操作正确（  ）?
-A. 甲
-B. 乙
-C. 丙
-D. 丁
-答案：A
-解析：本行以下都是说明文字，不含题号。
-
-（12345）这一行是说明文字，不能被当作题号。
-（  ）这里也不是题号。
-（A）选项字母同样不是题号。
-"""
-
-
-def test_bracket_like_text_not_treated_as_question_no() -> None:
-    """D3 误判防护：``（A）`` / ``（  ）`` / 5 位数 ``（12345）`` 都不能切成新题。"""
-    result = run_lines(_lines(TRAP_TXT))
-    assert result.block_count == 1
-
-    parsed = result.items[0].parsed
-    assert parsed.no == "1"
-    assert parsed.stem == "下列(A)项操作正确( )?"
-    assert parsed.options == {"A": "甲", "B": "乙", "C": "丙", "D": "丁"}
-    assert (parsed.answer, parsed.qtype) == ("A", "single")
-    # 说明文字落到解析区，不影响四项
-    assert "(12345)" in parsed.analysis
-    assert "(A)选项字母同样不是题号。" in parsed.analysis
-
-
-def test_first_answer_line_wins_in_same_block() -> None:
-    """D3-2：同一块内出现多条「答案：」时，必须取**第一条**（防止被后一题覆盖）。"""
-    block = Block(
-        no_text="7",
-        lines=_lines(
-            "7. 护理程序包括的步骤有?\n"
-            "A. 评估\nB. 诊断\nC. 计划\nD. 实施\nE. 评价\n"
-            "答案：ABCDE\n"
-            "答案：A\n"  # 混入的后一题答案，不得覆盖
-        ),
-    )
-    parsed = extract(block)
-    assert parsed.answer == "ABCDE"
-    assert parsed.qtype == "multiple"
-    assert list(parsed.options) == ["A", "B", "C", "D", "E"]
-
-
-D5_GAP_SAMPLE = """（1）无菌盘铺好后有效期为?
-A. 4小时
-B. 8小时
-C. 12小时
-D. 24小时
-（2）铺备用床的主要目的是?
-A. 保持病室整洁
-B. 便于观察病情
-C. 预防压疮
-D. 便于实施治疗
-答案：B
-"""
-
-
-def test_bracket_question_with_options_but_no_answer_still_splits() -> None:
-    """D5 扩展：前一道括号题「有 4 个选项、答案空着」时，后一道括号题必须仍切成新题。
-
-    ``missing_answer`` 是 P0-4 主动标记的异常之一，「有选项、答案空着」在护理题库里
-    很常见；若这种题不算「已收尾」，后一题的答案会串到前题，属内容级错误。
-    本用例断言：① 切出 2 块；② 第 1 题标 ``missing_answer``；③ 两题的选项/答案互不串。
-    """
-    result = run_lines(_lines(D5_GAP_SAMPLE))
-    assert result.block_count == 2
-
-    first, second = result.items[0], result.items[1]
-    assert (first.parsed.no, second.parsed.no) == ("1", "2")
-
-    # 第 1 题：自己的 4 个选项 + 无答案 + missing_answer
-    assert first.parsed.stem == "无菌盘铺好后有效期为?"
-    assert first.parsed.options == {"A": "4小时", "B": "8小时", "C": "12小时", "D": "24小时"}
-    assert first.parsed.answer == ""
-    assert "missing_answer" in {anomaly.type for anomaly in first.anomalies}
-
-    # 第 2 题：自己的 4 个选项 + 自己的答案，未被第 1 题污染
-    assert second.parsed.stem == "铺备用床的主要目的是?"
-    assert second.parsed.options == {
-        "A": "保持病室整洁",
-        "B": "便于观察病情",
-        "C": "预防压疮",
-        "D": "便于实施治疗",
-    }
-    assert (second.parsed.answer, second.parsed.qtype) == ("B", "single")
-    assert second.anomalies == []
-
-    # 反向串题检查：第 1 题的选项里不能出现第 2 题的文本，反之亦然
-    first_values = " ".join(first.parsed.options.values())
-    second_values = " ".join(second.parsed.options.values())
-    assert "保持病室整洁" not in first_values
-    assert "4小时" not in second_values
 
 
 # ===========================================================================
@@ -394,7 +271,7 @@ def test_bracket_question_with_options_but_no_answer_still_splits() -> None:
 @pytest.fixture()
 def searchable(client: TestClient) -> TestClient:
     """上传并入库主样本（3 题，含 % 与 _ 文本）。"""
-    _commit(client, _upload(client, "main.txt", MAIN_TXT)["import_id"])
+    _commit(client, _upload(client, "main.md", MAIN_MD)["import_id"])
     return client
 
 
@@ -463,7 +340,7 @@ def test_like_wildcards_are_escaped(searchable: TestClient) -> None:
 # ===========================================================================
 def test_dirty_options_json_never_crashes(client: TestClient) -> None:
     """边界：``options_json`` 为坏 JSON / ``{}`` / 数组 / 空串时，检索与详情都不能 500。"""
-    payload = _upload(client, "main.txt", MAIN_TXT)
+    payload = _upload(client, "main.md", MAIN_MD)
     file_id = payload["files"][0]["file_id"]
     _commit(client, payload["import_id"])
 

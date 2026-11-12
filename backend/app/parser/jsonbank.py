@@ -1,8 +1,7 @@
 """结构化 JSON 题库读取层：字段直接映射为 ``Parsed``，跳过文本切分。
 
-为什么单独一层：``splitter`` / ``extractor`` 是为「排版不规整的 Word/PDF 文本」
-设计的，靠题号正则与「答案：」行切分；JSON 本身已经带好结构，再走正则只会
-把误判风险引进来（例如题内 ``（1）（2）`` 子编号、同块答案行覆盖）。本模块
+为什么单独一层：为「排版不规整的 Word/PDF 文本」设计的那套切分逻辑已在 v1.3
+下线，但 JSON 与 Markdown 两种格式仍需要**同一套**题型/答案归一规则。本模块
 只做**字段映射与归一**，6 类异常判定仍由 :mod:`app.parser.validator` 统一负责
 （同一套规则、同一个入口，避免两套标准）。
 
@@ -27,6 +26,9 @@
   避免 ``normalize_answer`` 静默丢字母造成答案信息损失。
 * 题号缺省时按出现顺序补 ``1..n``；多题库包内每个题库单独计数（不同题库的
   「第 1 题」互不影响，不会误报 duplicate_number）。
+
+对外可复用的归一函数（Markdown 解析器与手录接口共用，防止规则漂移）：
+:func:`map_qtype`、:func:`fold_judge_options`、:func:`resolve_qtype`。
 """
 
 from __future__ import annotations
@@ -41,11 +43,11 @@ from .extractor import (
     JUDGE_FALSE,
     JUDGE_TRUE,
     Parsed,
-    _split_inline_options,  # 复用同一套内联选项切分，避免两处字母规则漂移
     decide_qtype,
     normalize_answer,
+    split_inline_options,  # 复用同一套内联选项切分，避免两处字母规则漂移
 )
-from .reader import ReaderError, _decode_bytes
+from .reader import ReaderError, decode_bytes
 
 # ---------------------------------------------------------------------------
 # 字段别名
@@ -91,6 +93,7 @@ TYPE_MAP: Dict[str, str] = {
     "简答题": "unknown",
     "问答题": "unknown",
     "unknown": "unknown",
+    "未知题型": "unknown",  # 本系统导出 Markdown 时的原样标签，保证往返可解
 }
 
 _OPT_LINE_RE = re.compile(r"^\s*([A-H])\s*[:：.、．)）]\s*(.*)$")
@@ -120,7 +123,7 @@ def load_banks(path: Path | str) -> List[RawBank]:
     if not raw:
         raise ReaderError("文件内容为空")
 
-    text, encoding = _decode_bytes(raw)
+    text, encoding = decode_bytes(raw)
     try:
         data = json.loads(text)
     except json.JSONDecodeError as exc:
@@ -211,18 +214,13 @@ def _to_parsed(item: Any, offset: int) -> Optional[Parsed]:
         options = _options_of(_first_value(item, OPTION_KEYS))
         answer_raw = _answer_of(_first_value(item, ANSWER_KEYS))
         analysis = _text_of(_first_value(item, ANALYSIS_KEYS))
-        declared = _type_of(_first_value(item, TYPE_KEYS))
+        declared = map_qtype(_first_value(item, TYPE_KEYS))
     except Exception as exc:  # pragma: no cover - 结构异常兜底
         return Parsed(no=no, stem="", parse_error=True, error_detail=f"字段解析异常：{exc}")
 
-    qtype = declared or decide_qtype(options, answer_raw)
-    if declared in ("single", "multiple"):
-        # 答案字母个数与声明题型冲突时以答案为准（避免 normalize_answer 丢掉多余字母）
-        decided = decide_qtype(options, answer_raw)
-        if decided in ("single", "multiple"):
-            qtype = decided
+    qtype = resolve_qtype(declared, options, answer_raw)
     if qtype == "judge":
-        options, answer_raw = _fold_judge_options(options, answer_raw)
+        options, answer_raw = fold_judge_options(options, answer_raw)
 
     return Parsed(
         no=no,
@@ -234,8 +232,47 @@ def _to_parsed(item: Any, offset: int) -> Optional[Parsed]:
     )
 
 
-def _fold_judge_options(options: Dict[str, str], answer: str) -> tuple[Dict[str, str], str]:
-    """判断题：把 A/B「正确/错误」选项折叠为「无选项 + √/×」。"""
+def resolve_qtype(
+    declared: Optional[str], options: Dict[str, str], answer: str
+) -> str:
+    """综合「声明题型 + 选项 + 答案」判定最终题型（JSON / Markdown 同一口径）。
+
+    规则：
+    * 声明缺失（``None`` / 空串）→ 用 :func:`decide_qtype` 按选项与答案推断；
+    * 声明为 ``single`` / ``multiple`` 但与答案字母个数冲突时**以答案为准**
+      （例如声明单选却给 ``ABD``，按多选存，避免 ``normalize_answer`` 静默丢字母）；
+    * 声明为 ``judge`` / ``unknown`` 时保留声明值。
+
+    Args:
+        declared: ``map_qtype`` 的结果（``single``/``multiple``/``judge``/``unknown``/``None``）。
+        options: 选项字典。
+        answer: 原始答案文本。
+
+    Returns:
+        最终题型字符串（``single``/``multiple``/``judge``/``unknown``）。
+    """
+    qtype = declared or decide_qtype(options, answer)
+    if declared in ("single", "multiple"):
+        decided = decide_qtype(options, answer)
+        if decided in ("single", "multiple"):
+            qtype = decided
+    return qtype
+
+
+def fold_judge_options(options: Dict[str, str], answer: str) -> tuple[Dict[str, str], str]:
+    """判断题：把 A/B「正确/错误」选项折叠为「无选项 + √/×」。
+
+    仅当选项恰好是 ``A/B`` 两个、且内容确实为「正确/错误」（或对/错、T/F 等
+    同义词）时才折叠，并把答案里的 ``A``/``B`` 映射为 ``√``/``×``；
+    其它情况原样返回，避免误伤真实的二选项选择题。
+
+    Args:
+        options: 原选项字典。
+        answer: 原答案文本。
+
+    Returns:
+        ``(折叠后的选项, 折叠后的答案)``。
+    """
     if set(options) != {"A", "B"}:
         return options, answer
 
@@ -303,7 +340,7 @@ def _number_text(item: Any, offset: int) -> str:
     return str(value).strip()
 
 
-def _type_of(value: Any) -> Optional[str]:
+def map_qtype(value: Any) -> Optional[str]:
     """题型归一；无法识别时返回 None（交由答案/选项推断）。"""
     if value is None:
         return None
@@ -379,5 +416,5 @@ def _options_of_text(text: str) -> Dict[str, str]:
     if result:
         return {letter: _collapse(text) for letter, text in result.items()}
 
-    _, inline = _split_inline_options(normalized)
+    _, inline = split_inline_options(normalized)
     return {letter: _collapse(text) for letter, text in inline.items()}

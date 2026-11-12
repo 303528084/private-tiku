@@ -148,7 +148,8 @@ async def create_import(
             "parts": [],
         }
         if suffix not in config.ALLOWED_EXT:
-            entry["error"] = f"不支持的文件类型，仅接受 {config.ALLOWED_EXT_HINT}"
+            # 文案唯一来源：config.UNSUPPORTED_EXT_TEMPLATE（前端 constants/import.ts 同字面量）
+            entry["error"] = config.unsupported_ext_message(suffix)
             staged.append(entry)
             continue
         try:
@@ -258,7 +259,11 @@ async def create_import(
         )
 
     if ok_files == 0:
-        only_type_error = all("不支持的文件类型" in item["error"] for item in file_payloads)
+        # 「全部是类型错误」判定与文案同源：只看 config.UNSUPPORTED_EXT_PREFIX 前缀，
+        # 避免把解析失败（文件内容为空 / 无题目标题）误判成类型错误。
+        only_type_error = all(
+            item["error"].startswith(config.UNSUPPORTED_EXT_PREFIX) for item in file_payloads
+        )
         if only_type_error:
             raise ApiError(
                 f"全部文件类型不受支持，仅接受 {config.ALLOWED_EXT_HINT}",

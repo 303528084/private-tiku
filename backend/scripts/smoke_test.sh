@@ -71,20 +71,21 @@ check "health status=ok" "$HEALTH" '"status":"ok"'
 check "fts trigram 可用" "$HEALTH" '"fts_trigram":true'
 
 echo
-echo "== 2. POST /api/imports（3 个文件：txt + docx + 无题号 txt）=="
+echo "== 2. POST /api/imports（3 个 md 文件：基础 + 变体 + 缺标题的坏文件）=="
 UPLOAD="$(curl -s -X POST "${BASE}/api/imports" \
-  -F "files[]=@app/tests/fixtures/sample_basic.txt" \
-  -F "files[]=@app/tests/fixtures/sample_questions.docx" \
-  -F "files[]=@app/tests/fixtures/sample_messy.txt")"
+  -F "files[]=@app/tests/fixtures/sample_basic.md" \
+  -F "files[]=@app/tests/fixtures/sample_variants.md" \
+  -F "files[]=@app/tests/fixtures/sample_messy.md")"
 echo "  ${UPLOAD:0:520}"
-check "上传返回 code=0" "$UPLOAD" '"code":0'
-check "3 个文件全部解析成功" "$UPLOAD" '"status":"parsed"'
+check "上传返回 code=0（部分成功）" "$UPLOAD" '"code":0'
+check "2 个文件解析成功" "$UPLOAD" '"status":"parsed"'
+check "1 个坏文件被拒并给出原因" "$UPLOAD" '"status":"failed"'
 FILE_COUNT="$(printf '%s' "$UPLOAD" | json_field "len(d['data']['files'])")"
 TOTAL_Q="$(printf '%s' "$UPLOAD" | json_field "sum(f['total_questions'] for f in d['data']['files'])")"
 IMPORT_ID="$(printf '%s' "$UPLOAD" | json_field "d['data']['import_id']")"
 echo "  import_id=$IMPORT_ID  文件数=$FILE_COUNT  题目总数=$TOTAL_Q"
-if [ "$FILE_COUNT" -eq 3 ] && [ "$TOTAL_Q" -ge 10 ]; then
-  echo "  [PASS] 文件数=3 且题目总数 >= 10"; PASS=$((PASS + 1))
+if [ "$FILE_COUNT" -eq 3 ] && [ "$TOTAL_Q" -ge 16 ]; then
+  echo "  [PASS] 文件数=3 且题目总数 >= 16"; PASS=$((PASS + 1))
 else
   echo "  [FAIL] 文件数=$FILE_COUNT 题目总数=$TOTAL_Q"; FAIL=$((FAIL + 1))
 fi
@@ -94,7 +95,7 @@ echo "== 3. GET /api/imports/{id}（导入详情）=="
 DETAIL="$(curl -s "${BASE}/api/imports/${IMPORT_ID}")"
 check "详情含 status=pending_confirm" "$DETAIL" '"status":"pending_confirm"'
 check "详情含 3 个文件明细" "$DETAIL" '"file_id":3'
-check "详情含异常计数" "$DETAIL" '"anomaly_count":4'
+check "详情含异常计数" "$DETAIL" '"anomaly_count":2'
 
 echo
 echo "== 4. POST /api/imports/{id}/commit（确认入库）=="
@@ -102,7 +103,7 @@ COMMIT="$(curl -s -X POST "${BASE}/api/imports/${IMPORT_ID}/commit")"
 echo "  $COMMIT"
 check "commit 返回提交数" "$COMMIT" '"committed":'
 COMMITTED="$(printf '%s' "$COMMIT" | json_field "d['data']['committed']")"
-if [ "$COMMITTED" -lt 5 ]; then
+if [ "$COMMITTED" -lt 16 ]; then
   echo "  [FAIL] 入库题数过少：$COMMITTED"; FAIL=$((FAIL + 1))
 else
   echo "  [PASS] 入库题数 = $COMMITTED"; PASS=$((PASS + 1))
@@ -126,9 +127,9 @@ QUESTION_ID="$(printf '%s' "$SEARCH" | json_field "d['data']['items'][0]['id']")
 echo "  question_id=$QUESTION_ID"
 
 echo
-echo "== 5b. GET /api/search?q=脉搏短绌 心律失常（>=3 字 → FTS5 MATCH 路径）=="
-SEARCH_FTS="$(curl -s --get "${BASE}/api/search" --data-urlencode "q=脉搏短绌 心律失常")"
-check "FTS 多关键词命中" "$SEARCH_FTS" '"total":1'
+echo "== 5b. GET /api/search?q=正常成人腋温（>=3 字 → FTS5 MATCH 路径）=="
+SEARCH_FTS="$(curl -s --get "${BASE}/api/search" --data-urlencode "q=正常成人腋温")"
+check "FTS 多字词命中" "$SEARCH_FTS" '"total":1'
 check "FTS 耗时字段正常" "$SEARCH_FTS" '"took_ms":'
 
 echo
@@ -141,8 +142,7 @@ echo "== 7. GET /api/anomalies?handled=0（异常清单）=="
 ANOM="$(curl -s --get "${BASE}/api/anomalies" --data-urlencode "handled=0" --data-urlencode "size=5")"
 check "异常 code=0" "$ANOM" '"code":0'
 check "含缺答案异常" "$ANOM" 'missing_answer'
-check "含题号重复异常" "$ANOM" 'duplicate_number'
-check "含解析异常" "$ANOM" 'parse_error'
+check "含选项不足异常" "$ANOM" 'too_few_options'
 ANOM_TOTAL="$(printf '%s' "$ANOM" | json_field "d['data']['total']")"
 ANOM_ID="$(printf '%s' "$ANOM" | json_field "[i['anomaly']['id'] for i in d['data']['items'] if i['anomaly']['type']=='missing_answer'][0]")"
 ANOM_QID="$(printf '%s' "$ANOM" | json_field "[i['question']['id'] for i in d['data']['items'] if i['anomaly']['type']=='missing_answer'][0]")"

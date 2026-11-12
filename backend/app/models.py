@@ -112,6 +112,24 @@ class QuestionUpdateRequest(BaseModel):
     qtype: Optional[QType] = Field(default=None, description="题型，缺省时按答案自动判定")
 
 
+class QuestionCreateRequest(QuestionUpdateRequest):
+    """POST /api/questions 请求体（手录单题）。
+
+    在 :class:`QuestionUpdateRequest` 的字段基础上增加「题库名称」与「题号」。
+    与 PUT 的差异：``qtype`` 改为**必填字符串**并由接口层逐字校验，以便在缺失或
+    非法时返回契约规定的 ``题型只能是 single / multiple / judge``（而不落到
+    Pydantic 的通用枚举报错文案上）。
+    """
+
+    qtype: str = Field(default="", description="题型：single / multiple / judge（必填）")
+    library_name: Optional[str] = Field(
+        default=None, description="题库名称；省略时落缺省「手动录入」"
+    )
+    question_no: Optional[str] = Field(
+        default=None, description="题号；留空时取该题库内纯数字题号 max+1"
+    )
+
+
 class AnomalyPatchRequest(BaseModel):
     """PATCH /api/anomalies/{id} 请求体。"""
 

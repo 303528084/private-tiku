@@ -400,3 +400,161 @@ def count_same_number(conn: sqlite3.Connection, import_file_id: int, question_no
         (int(import_file_id), str(question_no)),
     ).fetchone()
     return int(row["c"]) if row else 0
+
+
+# ---------------------------------------------------------------------------
+# 手录题库（v1.3）：import_files 即题库载体，不加表、不迁移
+# ---------------------------------------------------------------------------
+LIBRARY_KINDS: frozenset[str] = frozenset({"manual", "json", "md", "docx", "txt", "pdf"})
+"""``GET /api/libraries`` 的 ``kind`` 白名单；不在其中的脏值统一归 ``other``。"""
+
+LIBRARY_AGGREGATE_SQL: str = """
+SELECT
+  (SELECT MIN(g.id) FROM import_files g WHERE g.filename = f.filename) AS id,
+  f.filename AS name,
+  (SELECT g.file_type FROM import_files g WHERE g.filename = f.filename
+     ORDER BY g.id ASC LIMIT 1) AS file_type,
+  (SELECT COUNT(*) FROM questions q
+     JOIN import_files g ON g.id = q.import_file_id
+     WHERE g.filename = f.filename) AS question_count,
+  COALESCE(
+    (SELECT MAX(q.updated_at) FROM questions q
+       JOIN import_files g ON g.id = q.import_file_id
+       WHERE g.filename = f.filename),
+    (SELECT MAX(g.created_at) FROM import_files g WHERE g.filename = f.filename)
+  ) AS last_updated
+FROM import_files f
+GROUP BY f.filename
+HAVING question_count > 0
+ORDER BY last_updated DESC, name ASC
+LIMIT ?
+"""
+"""题库下拉数据源的聚合查询（架构 §3）。
+
+* 按 ``filename`` 分组：同名历史 docx 多次导入合并为一条；
+* ``id`` = 组内最小 ``import_files.id``（手录复用同一条记录，天然稳定）；
+* ``question_count`` = 组内题目数合计，过滤掉 0 题的记录；
+* ``last_updated`` = ``MAX(questions.updated_at)``，全空时兜底 ``MAX(import_files.created_at)``
+  （刚建库还没题时也不至于给出 NULL）；
+* 排序 ``last_updated DESC, name ASC``：刚录过的库排最前。
+"""
+
+
+def find_manual_library(
+    conn: sqlite3.Connection, name: str
+) -> Optional[Dict[str, Any]]:
+    """按名称查找题库载体（``import_files``），返回 id 最小那条的记录。
+
+    Args:
+        conn: 数据库连接。
+        name: 题库名称（即 ``import_files.filename``）。
+
+    Returns:
+        记录 dict（含 ``id`` / ``import_id`` / ``filename`` / ``file_type``），无则 ``None``。
+    """
+    row = conn.execute(
+        "SELECT * FROM import_files WHERE filename = ? ORDER BY id ASC LIMIT 1",
+        (str(name),),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def create_manual_library(conn: sqlite3.Connection, name: str) -> Dict[str, Any]:
+    """首次手录时创建题库载体：一条 ``imports`` 批次 + 一条 ``import_files``。
+
+    批次直接置 ``committed``（手录题直接 published，没有 pending 阶段）；计数列写 0
+    作为历史快照，读取侧一律走 :data:`IMPORT_LIVE_COLUMNS` 实时聚合，
+    因此 ``/api/imports`` 与统计页口径与导入完全一致。
+
+    Args:
+        conn: 数据库连接（调用方负责事务提交）。
+        name: 题库名称。
+
+    Returns:
+        新建题库 dict：``{"id", "import_id", "name", "file_type", "created": True}``。
+    """
+    cursor = conn.execute(
+        """
+        INSERT INTO imports (status, total_files, ok_files, failed_files,
+                             total_questions, committed_questions)
+        VALUES (?, 1, 1, 0, 0, 0)
+        """,
+        ("committed",),
+    )
+    import_id = int(cursor.lastrowid)
+    cursor = conn.execute(
+        """
+        INSERT INTO import_files (import_id, filename, file_type, status, error,
+                                  total_questions, anomaly_count)
+        VALUES (?, ?, ?, ?, '', 0, 0)
+        """,
+        (import_id, str(name), "manual", "parsed"),
+    )
+    file_id = int(cursor.lastrowid)
+    return {
+        "id": file_id,
+        "import_id": import_id,
+        "name": str(name),
+        "file_type": "manual",
+        "created": True,
+    }
+
+
+def next_question_no(conn: sqlite3.Connection, import_file_id: int) -> str:
+    """取该题库内下一个题号（纯数字题号 max+1；无数字题号时取 ``1``）。
+
+    只统计**纯数字**题号（``GLOB '[0-9]*'`` 且不含非数字字符），避免把
+    ``A-1`` / ``判断题1`` 这类脏题号拿去 ``CAST`` 成 0。
+
+    Args:
+        conn: 数据库连接。
+        import_file_id: 题库载体 id。
+
+    Returns:
+        十进制字符串题号。
+    """
+    row = conn.execute(
+        """
+        SELECT MAX(CAST(question_no AS INTEGER)) AS m
+        FROM questions
+        WHERE import_file_id = ?
+          AND question_no GLOB '[0-9]*'
+          AND question_no NOT GLOB '*[^0-9]*'
+        """,
+        (int(import_file_id),),
+    ).fetchone()
+    value = row["m"] if row is not None else None
+    if value is None:
+        return "1"
+    return str(int(value) + 1)
+
+
+def list_libraries(
+    conn: sqlite3.Connection, limit: int = 500
+) -> List[Dict[str, Any]]:
+    """题库名称下拉数据源（按 ``filename`` 聚合，含历史 docx/txt/pdf 记录）。
+
+    Args:
+        conn: 数据库连接。
+        limit: 返回条数上限（防御性上限，默认 500）。
+
+    Returns:
+        ``[{"id", "name", "file_type", "kind", "question_count", "last_updated"}]``，
+        按 ``last_updated DESC, name ASC`` 排序。
+    """
+    rows = conn.execute(LIBRARY_AGGREGATE_SQL, (int(limit),)).fetchall()
+    items: List[Dict[str, Any]] = []
+    for row in rows:
+        data = dict(row)
+        file_type = data.get("file_type") or ""
+        items.append(
+            {
+                "id": int(data["id"]),
+                "name": data["name"],
+                "file_type": file_type,
+                "kind": file_type if file_type in LIBRARY_KINDS else "other",
+                "question_count": int(data.get("question_count") or 0),
+                "last_updated": data.get("last_updated"),
+            }
+        )
+    return items
