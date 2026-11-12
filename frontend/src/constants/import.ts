@@ -32,12 +32,28 @@ export const MD_TEMPLATE_FILENAME = 'tiku-template.md';
  * 旧格式拒绝文案。
  *
  * 模板必须与后端 config.UNSUPPORTED_EXT_TEMPLATE 逐字一致（含标点与空格），
- * 否则前端预拦截与后端兜底会出现两种说法。
+ * 否则前端预拦截与后端兜底会出现两种说法。模板字面量里的插值名 ext 会被
+ * backend/app/tests/test_text_parity.py 逐字扫描，改动时必须同步后端并跑该用例。
  *
- * @param ext 带点的后缀，如 ".docx"；也可传文件名，函数会自动取后缀。
+ * 入参规范化（与后端 config.unsupported_ext_message() 同口径）：
+ * - 先去首尾空白并转小写（大小写不敏感）；
+ * - 传文件名（含点，如 "old.DOCX"）时自动取后缀 ".docx"，取不到后缀则回退原串；
+ * - 传裸后缀（如 "docx"）时原样使用，并自动补前导点（"docx" → ".docx"）；
+ * - 空值（或全空白）显示「未知」。
+ *
+ * @param ext 扩展名（".docx" / "docx"）或文件名（"old.DOCX"），大小写不敏感。
  * @returns 可直接展示给用户的提示文案。
  */
 export function unsupportedExtMessage(ext: string): string {
+  const raw = (ext || '').trim().toLowerCase();
+  let suffix = raw.includes('.') ? fileExt(raw) || raw : raw;
+  if (!suffix) {
+    suffix = '未知';
+  } else if (!suffix.startsWith('.')) {
+    suffix = `.${suffix}`;
+  }
+  // 模板里的插值占位必须逐字保留（测试按此占位替换），故复用参数名承载规范化结果。
+  ext = suffix;
   return `不支持的文件类型「${ext}」：v1.3 起仅支持 .json / .md 导入。已有的 docx/txt/pdf 题库不受影响，可直接搜索与导出。`;
 }
 

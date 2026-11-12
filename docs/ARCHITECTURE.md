@@ -1,6 +1,11 @@
 # private-tiku 架构设计（v1.0）
 
-私有护理题库系统：DOCX/TXT/PDF 批量导入 → 规则解析 → 异常标记 → FTS5 全文检索 → 异常校对 → 导出；单容器 Docker 私有化部署，数据全部落 `./data`。
+> ⚠️ **历史文档说明**：本文是 v1.0 基线设计快照；正文的导入格式、解析链路与依赖清单均为当时状态，不代表当前代码。
+> v1.3 起导入格式已收敛为 `.json / .md / .markdown`（JSON 字段映射 + Markdown 行级状态机），docx/txt/pdf 导入链路
+> 与 `python-docx` / `pdfplumber` 依赖均已删除；历史旧格式数据仍可检索与导出。
+> **当前实现以 `README.md` §5 与 `docs/IMPLEMENTATION.md` §12 为准。**
+
+私有护理题库系统：JSON / Markdown 批量导入 → 规则解析 → 异常标记 → FTS5 全文检索 → 异常校对 → 导出；单容器 Docker 私有化部署，数据全部落 `./data`。
 
 ## 1. 技术选型
 | 层 | 选型 | 理由 |
@@ -8,7 +13,7 @@
 | 后端 | Python 3.11 + FastAPI + uvicorn | 轻量、自带 OpenAPI、StaticFiles 可托管前端产物 |
 | 数据库 | sqlite3 标准库（不引 SQLAlchemy/Alembic） | 单机内网、万级题量、零中间件；直接 SQL 可控 |
 | 检索 | SQLite FTS5 `tokenize='trigram'` + `snippet()` | 中文子串匹配无需分词库；命中高亮；万级 <50ms |
-| 解析 | 纯 Python 正则 + 状态机（python-docx / pdfplumber / chardet） | 可解释、可复现、无模型依赖，准确率可控 |
+| 解析 | 结构化格式解析（JSON 字段映射 / Markdown 行级状态机）+ chardet 编码探测 | 可解释、可复现、无模型依赖，准确率可控 |
 | 前端 | Vite + React 18 + MUI 5 + Tailwind 3 | `npm run build` 静态产物由 FastAPI 托管，单容器 |
 | 部署 | docker-compose 单服务 + 多阶段 Dockerfile | node 构建前端 → python 运行；SQLite 挂载 `./data` |
 
@@ -213,17 +218,15 @@ pipeline.run(file) -> list[(Parsed, list[Anomaly])]   # 供 imports.py 落库
 | T05 | QA 测试与端到端验收 | T02、T03、T04 | app/tests/test_api.py、tests/fixtures/、修复缺陷（跨 T02–T04 文件） | 解析准确率抽检 ≥90%；API 全用例通过；docker 一键部署端到端演示（诱导异常→修复→导出）；性能：万题搜索 <1s |
 
 ## 8. 依赖清单与共享约定
-**backend/requirements.txt**
+**backend/requirements.txt**（v1.3 起为「下限 + 主版本上限」区间约束，且已移除 `python-docx` / `pdfplumber`；精确版本见文件头注释与 `pip freeze`）
 ```
-fastapi==0.111.0
-uvicorn[standard]==0.30.1
-python-multipart==0.0.9
-python-docx==1.1.2
-pdfplumber==0.11.0
-chardet==5.2.0
-pydantic==2.7.4
-pytest==8.2.2
-httpx==0.27.0
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30,<1.0
+python-multipart>=0.0.9
+chardet>=5.2,<6.0
+pydantic>=2.9,<3.0
+pytest>=8.2,<9.0
+httpx>=0.27,<1.0
 ```
 
 **frontend/package.json dependencies**
@@ -238,13 +241,13 @@ postcss 8.4.39 · autoprefixer 10.4.19 · @types/react 18.3.3 · @types/react-do
 - 字段一律 `snake_case`；API 响应统一 `{code:0, message:"ok", data:{...}}`。
 - 题目 JSON：`{id, import_file_id, question_no, qtype, stem, options:{"A":".."}, answer, analysis, status, anomalies:[{type,detail,handled}]}`。
 - 题型枚举：`single|multiple|judge|unknown`；异常枚举：`missing_answer|missing_options|empty_stem|duplicate_number|too_few_options|parse_error`；题目状态：`pending|published`；导入状态：`parsing|pending_confirm|committed|failed`。
-- 只检索 `status='published'` 题目；上传仅接受 `.docx/.txt/.pdf`，落盘名 `{uuid}{ext}`，原文件名存库。
+- 只检索 `status='published'` 题目；上传仅接受 `.json/.md/.markdown`，落盘名 `{uuid}{ext}`，原文件名存库。
 - 前端所有请求走 `src/api/client.ts`（baseURL `/api`），错误统一 toast；高亮片段由后端转义后以 `<mark>` 包裹，前端 `Highlight.tsx` 安全渲染（禁直插未转义内容）。
 - 异常翻新：`PUT /questions/{id}` 后按最新内容**全量重建**该题 anomalies，避免脏数据残留。
 
 **待明确事项**
 1. 题量上限按万级设计；十万级需迁移独立搜索引擎（接口已隔离）。
-2. PDF 扫描件 OCR 不在本期（文本型 PDF 之外走 `parse_error`/"无可提取文本"）。
+2. PDF 扫描件 OCR 不在本期（文本型 PDF 之外走 `parse_error`/"无可提取文本"）（v1.0 历史项；v1.3 起不再支持 PDF 导入，本条已不适用）。
 3. "缺选项"阈值定为 <4（护理选择题通常四选项），如需按题型区分可后续调整。
 4. 无答案但有解析：正常入库并标 `missing_answer`，不阻断。
 5. 权限/多用户未做（单管理员内网模式）；如需公网暴露需前置反代鉴权。
