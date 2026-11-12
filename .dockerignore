@@ -1,0 +1,13 @@
+# 构建上下文排除项（`docker build -f backend/Dockerfile .`）
+node_modules
+**/node_modules
+frontend/dist
+data
+**/__pycache__
+**/*.pyc
+.git
+.idea
+.vscode
+*.db
+*.db-wal
+*.db-shm

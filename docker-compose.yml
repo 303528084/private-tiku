@@ -1,0 +1,28 @@
+# private-tiku 单服务编排（数据全部落在宿主机 ./data）
+services:
+  tiku:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: private-tiku:1.0.0
+    container_name: private-tiku
+    restart: unless-stopped
+    ports:
+      # 宿主机端口可通过 .env 中的 TIKU_PORT 覆盖
+      - "${TIKU_PORT:-8000}:8000"
+    environment:
+      TIKU_PORT: "8000"
+      TIKU_DATA_DIR: /app/data
+    volumes:
+      # SQLite 数据库与上传原始文件持久化
+      - ./data:/app/data
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health').status==200 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

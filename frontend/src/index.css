@@ -1,0 +1,30 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, -apple-system, sans-serif;
+  background-color: #f5f7fb;
+}
+
+/* 搜索结果高亮（后端返回的 <mark> 片段由 Highlight 组件安全渲染） */
+mark {
+  background-color: #fff59d;
+  color: inherit;
+  padding: 0 2px;
+  border-radius: 3px;
+}
+
+/* 选项网格 */
+.option-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 4px 16px;
+}

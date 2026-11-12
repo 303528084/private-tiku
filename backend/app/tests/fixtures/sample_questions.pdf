@@ -1,0 +1,155 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 609 >>
+stream
+BT
+/F1 12 Tf
+16 TL
+1 0 0 1 40 800 Tm
+<59874EA779D162A474065B668BD59898> Tj
+T*
+<0031002E00206B635E388DB36708598A5A2076847F8A6C3491CF7EA64E3AFF1F> Tj
+T*
+<0041002E0020003300300030006D006C> Tj
+T*
+<0042002E0020003800300030006D006C> Tj
+T*
+<0043002E00200032003000300030006D006C> Tj
+T*
+<0044002E00200033003000300030006D006C> Tj
+T*
+<7B546848FF1A0042> Tj
+T*
+<0032002E00204EA7540E51FA884067005E3889C17684539F56E0662FFF1F> Tj
+T*
+<0041002E00205B505BAB65367F294E4F529B> Tj
+T*
+<0042002E00208F6F4EA7905388C24F24> Tj
+T*
+<0043002E002080CE76D856E07D20> Tj
+T*
+<0044002E002051DD8840529F80FD969C788D> Tj
+T*
+<7B546848FF1A0041> Tj
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type0 /BaseFont /STSong-Light /Encoding /Identity-H /DescendantFonts [6 0 R] /ToUnicode 7 0 R >>
+endobj
+6 0 obj
+<< /Type /Font /Subtype /CIDFontType0 /BaseFont /STSong-Light /CIDSystemInfo << /Registry (Adobe) /Ordering (GB1) /Supplement 2 >> /FontDescriptor 8 0 R /DW 1000 /DW2 [880 -1000] >>
+endobj
+7 0 obj
+<< /Length 1207 >>
+stream
+/CIDInit /ProcSet findresource begin
+12 dict begin
+begincmap
+/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def
+/CMapName /Adobe-Identity-UCS def
+/CMapType 2 def
+1 begincodespacerange
+<0000> <FFFF>
+endcodespacerange
+63 beginbfchar
+<0020> <0020>
+<002E> <002E>
+<0030> <0030>
+<0031> <0031>
+<0032> <0032>
+<0033> <0033>
+<0038> <0038>
+<0041> <0041>
+<0042> <0042>
+<0043> <0043>
+<0044> <0044>
+<006C> <006C>
+<006D> <006D>
+<4E3A> <4E3A>
+<4E4F> <4E4F>
+<4EA7> <4EA7>
+<4F24> <4F24>
+<51DD> <51DD>
+<51FA> <51FA>
+<529B> <529B>
+<529F> <529F>
+<539F> <539F>
+<540E> <540E>
+<56E0> <56E0>
+<5987> <5987>
+<598A> <598A>
+<5A20> <5A20>
+<5B50> <5B50>
+<5B66> <5B66>
+<5BAB> <5BAB>
+<5E38> <5E38>
+<62A4> <62A4>
+<6536> <6536>
+<662F> <662F>
+<6700> <6700>
+<6708> <6708>
+<6848> <6848>
+<6B63> <6B63>
+<6C34> <6C34>
+<7406> <7406>
+<7684> <7684>
+<76D8> <76D8>
+<788D> <788D>
+<79D1> <79D1>
+<7B54> <7B54>
+<7D20> <7D20>
+<7EA6> <7EA6>
+<7F29> <7F29>
+<7F8A> <7F8A>
+<80CE> <80CE>
+<80FD> <80FD>
+<8840> <8840>
+<88C2> <88C2>
+<89C1> <89C1>
+<8BD5> <8BD5>
+<8DB3> <8DB3>
+<8F6F> <8F6F>
+<9053> <9053>
+<91CF> <91CF>
+<969C> <969C>
+<9898> <9898>
+<FF1A> <FF1A>
+<FF1F> <FF1F>
+endbfchar
+endcmap
+CMapName currentdict /CMap defineresource pop
+end
+end
+
+endstream
+endobj
+8 0 obj
+<< /Type /FontDescriptor /FontName /STSong-Light /Flags 4 /FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 880 /Descent -120 /CapHeight 700 /StemV 93 >>
+endobj
+xref
+0 9
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000121 00000 n 
+0000000247 00000 n 
+0000000907 00000 n 
+0000001044 00000 n 
+0000001241 00000 n 
+0000002500 00000 n 
+trailer
+<< /Size 9 /Root 1 0 R >>
+startxref
+2670
+%%EOF

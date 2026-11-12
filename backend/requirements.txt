@@ -1,0 +1,17 @@
+# private-tiku 后端依赖
+#
+# 说明：架构文档 §8 给出的是全 == 精确版本示例，其中 pydantic==2.7.4 及其
+# pydantic-core 在 Python 3.13 上没有 cp313 wheel，源码编译会失败。
+# 因此这里改为「下限 + 主版本上限」的约束：既能在本机 Python 3.13 上直接
+# 二进制安装，也能在容器 Python 3.11 上得到等价可用的版本组合。
+# 需要完全可复现的构建请使用 `pip freeze > requirements.lock.txt`。
+
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30,<1.0
+python-multipart>=0.0.9
+python-docx>=1.1,<2.0
+pdfplumber>=0.11,<1.0
+chardet>=5.2,<6.0
+pydantic>=2.9,<3.0
+pytest>=8.2,<9.0
+httpx>=0.27,<1.0
