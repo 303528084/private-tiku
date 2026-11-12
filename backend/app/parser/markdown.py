@@ -45,6 +45,12 @@ STATE_STEM = "stem"
 STATE_OPTION = "option"
 STATE_ANSWER = "answer"
 STATE_ANALYSIS = "analysis"
+STATE_TAIL = "tail"
+"""``---`` 之后、下一个 ``## `` 之前的尾部区域：整块丢弃。
+
+导出文件里 ``---`` 是分题分隔线，其后的内容（若有）属于版式尾巴而非解析内容。
+若在 ANALYSIS 阶段继续追加，会把「分隔线之后的行」误并进上一题的解析（v1.3 QA 一般-3）。
+"""
 
 # ---------------------------------------------------------------------------
 # 正则（全部作用于 normalize_text() 之后的行）
@@ -195,12 +201,17 @@ def parse_bank(text: str, name: str) -> jsonbank.RawBank:
         if not line:
             continue
 
-        # 3) 全局丢弃行：分隔线 / 来源 / 异常标记 / 文件头 "# "
-        if RULE_RE.match(line) or IGNORE_RE.match(line) or H1_RE.match(line):
+        # 3) 全局丢弃行：来源 / 异常标记 / 文件头 "# "
+        if IGNORE_RE.match(line) or H1_RE.match(line):
             continue
 
-        # 4) 文件头阶段：其余内容整块忽略（导出时间、题目总数等统计无害）
-        if state == STATE_HEADER or current is None:
+        # 3.1) 分隔线：分题线本身无内容；进入 TAIL，其后的行丢弃到下一个标题
+        if RULE_RE.match(line):
+            state = STATE_TAIL
+            continue
+
+        # 4) 文件头 / 尾部区域：其余内容整块忽略
+        if state in (STATE_HEADER, STATE_TAIL) or current is None:
             continue
 
         draft = current

@@ -65,8 +65,13 @@ export function isSupportedFile(filename: string): boolean {
 /** 组件 accept 属性值（"..."），供 input / dropzone 直接使用。 */
 export const ACCEPT_ATTR = ACCEPT_EXT.join(',');
 
-/** 人类可读的格式说明，用于标题与提示（"JSON / MD"）。 */
-export const ACCEPT_LABEL = 'JSON / MD';
+/**
+ * 人类可读的格式说明（"JSON / Markdown"）。
+ *
+ * 用「Markdown」而不是扩展名拼串（`.MD / .MARKDOWN`），与拒绝文案里的
+ * 「仅支持 .json / .md 导入」口径一致：.md 与 .markdown 是同一个格式的两种后缀。
+ */
+export const ACCEPT_LABEL = 'JSON / Markdown';
 
 /**
  * 最小可用 Markdown 题库模板：与后端导出格式同构，可直接上传。

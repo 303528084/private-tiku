@@ -70,6 +70,13 @@ export interface QuestionFormProps {
   disabled?: boolean;
   /** 校验结果回调（页面据此禁用保存）。 */
   onValidityChange?: (result: QuestionFormValidation) => void;
+  /**
+   * 是否渲染红字/黄字提示（默认 true）。
+   *
+   * 录题页在「保存并继续录入」清空表单后需要先静默：否则用户一看到空表单就顶着
+   * 「题干至少 3 个字」等 3 条红字，会误以为刚才的保存失败了。
+   */
+  showMessages?: boolean;
   /** 动作区插槽（保存 / 删除 / 清空由页面注入）。 */
   children?: ReactNode;
 }
@@ -113,6 +120,7 @@ export default function QuestionForm({
   qtypeOptions,
   disabled = false,
   onValidityChange,
+  showMessages = true,
   children,
 }: QuestionFormProps): JSX.Element {
   const validation = useMemo(() => validateQuestionForm(value, mode), [value, mode]);
@@ -315,7 +323,7 @@ export default function QuestionForm({
         onChange={(event) => patch({ analysis: event.target.value })}
       />
 
-      {validation.messages.length > 0 ? (
+      {showMessages && validation.messages.length > 0 ? (
         <Box>
           {validation.messages.map((message) => (
             <Typography key={message} variant="caption" color="error.main" display="block">
@@ -324,7 +332,7 @@ export default function QuestionForm({
           ))}
         </Box>
       ) : null}
-      {validation.optionWarnings.length > 0 ? (
+      {showMessages && validation.optionWarnings.length > 0 ? (
         <Box>
           {validation.optionWarnings.map((message) => (
             <Typography key={message} variant="caption" color="warning.main" display="block">

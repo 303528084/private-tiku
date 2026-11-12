@@ -118,7 +118,7 @@ private-tiku/
 | DELETE | `/api/imports/{id}` | 删除批次（题目 / 异常级联 + 清理落盘文件） |
 | GET | `/api/search?q=&type=&only_anomaly=&doc_id=&page=&size=` | 检索 + 筛选 + 高亮 |
 | POST | `/api/questions` | 手动新增单题（`library_name` 缺省「手动录入」，保存即 published） |
-| GET | `/api/libraries` | 题库名称列表（录题页下拉，按 filename 聚合，含历史 docx/pdf 来源） |
+| GET | `/api/libraries` | 题库名称列表（录题页下拉，按 `filename`+`file_type` 聚合，含历史 docx/txt/pdf 来源；同名手录库与导入库分开显示） |
 | GET | `/api/questions/{id}` | 题目详情（含异常） |
 | PUT | `/api/questions/{id}` | 编辑题目并重算异常 |
 | DELETE | `/api/questions/{id}` | 删除题目 |
@@ -208,7 +208,7 @@ judge/single_choice/multiple_choice…）；选项 `{"A":"…"}`、`A: 甲\rB: �
 ## 6. 测试
 
 ```bash
-# 全量后端测试（162 项：解析 / JSON / Markdown / API / 回归）
+# 全量后端测试（165 项：解析 / JSON / Markdown / API / 回归）
 cd backend && python -m pytest -q
 
 # 端到端冒烟（自动启停 uvicorn，35 项检查）
@@ -236,12 +236,16 @@ Markdown 往返一致性由 `tests/test_markdown.py::test_markdown_roundtrip_is_
 5. **JSON 题库的题号可能被重排**：源文件按题型分段编号（各自从 1 开始）时，为保证「题号」
    唯一可引用会重排为 1..n，与原始卷面题号不再一一对应；如需保留原题号，请提供本身唯一的编号。
 6. **JSON 的 `explanation` 落「解析」字段**：部分导出把「标准名-章节」写在该字段，界面上会显示为解析。
-7. **不再支持 docx / txt / pdf**：v1.3 起这两种旧格式在前后端一处被拒（文案一致，`code 42201`）。
+7. **不再支持 docx / txt / pdf**：v1.3 起这三种旧格式在前后端一处被拒（文案一致，`code 42201`）。
    若手上只有 Word 稿，请先转成 Markdown（见 §5）或 JSON；扫描件 PDF 从未支持 OCR。
-8. **Markdown 一个文件只对应一个题库**：`# 标题` 不作为题库名（来源恒为上传文件名），
+   历史已入库的 docx/txt/pdf 题库不受影响，仍可检索、校对、导出。
+8. **手录库与导入库互不合并**：同名（如都叫 `X.md`）时是两条独立记录（`file_type` 分别为
+   `manual` 与 `md`），因此 `/api/libraries` 里会出现两行同名但类型不同的条目——这是刻意的，
+   否则手录题会串进导入题库、把导入题数改脏。
+9. **Markdown 一个文件只对应一个题库**：`# 标题` 不作为题库名（来源恒为上传文件名），
    按标题拆多题库列入后续版本；同标题多份 md 不会被合并。
-9. **手动录题的题库挂在 `import_files` 上**（`file_type='manual'`），因此会出现在导入批次列表里，
-   这是刻意复用数据模型的结果，不额外新增「题库表」。
+10. **手动录题的题库挂在 `import_files` 上**（`file_type='manual'`），因此会出现在导入批次列表里，
+    这是刻意复用数据模型的结果，不额外新增「题库表」。
 
 ---
 

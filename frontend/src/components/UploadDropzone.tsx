@@ -5,7 +5,7 @@ import { Alert, Box, Button, Link, Stack, Typography } from '@mui/material';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import {
   ACCEPT_ATTR,
-  ACCEPT_EXT,
+  ACCEPT_LABEL,
   MD_TEMPLATE_FILENAME,
   downloadMarkdownTemplate,
   fileExt,
@@ -15,7 +15,6 @@ import {
 
 const MAX_FILE_SIZE = 20 * 1024 * 1024;
 const MAX_FILES = 20;
-const ACCEPT_LABEL = ACCEPT_EXT.map((ext) => ext.replace('.', '').toUpperCase()).join(' / ');
 
 export interface UploadDropzoneProps {
   onFiles: (files: File[]) => void;

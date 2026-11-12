@@ -475,3 +475,14 @@ def test_option_continuation_merges_into_last_option() -> None:
     parsed = markdown.parse_bank(text, "x.md").questions[0]
     assert parsed.options["B"] == "乙项第一段 第二段续写"
     assert parsed.options["A"] == "甲"
+
+
+def test_analysis_stops_at_horizontal_rule() -> None:
+    """``---`` 之后的内容不得并入上一题解析（v1.3 QA 一般-3）。"""
+    text = (
+        "## 1. [单选题]\n\n题干内容足够长?\n\n- **A.** 甲\n- **B.** 乙\n\n"
+        "**答案**：A\n\n**解析**：正常解析第一行\n\n---\n\n这段是版式尾巴不应进解析\n"
+    )
+    parsed = markdown.parse_bank(text, "x.md").questions[0]
+    assert parsed.analysis == "正常解析第一行"
+    assert "版式尾巴" not in parsed.analysis

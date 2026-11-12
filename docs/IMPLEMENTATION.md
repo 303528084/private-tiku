@@ -1,8 +1,12 @@
 # private-tiku 实现说明（T01–T04）
 
 > 本文档记录**实际落地情况**：文件清单、启动命令、依赖版本决策、真实验证输出、与架构文档的偏离和已知限制。
-> 架构依据：`docs/ARCHITECTURE.md`（v1.0）；需求依据：`docs/PRD.md`。
-> 实现者：工程师 寇豆码（software-engineer）
+> 架构依据：`docs/ARCHITECTURE.md`；需求依据：`docs/PRD.md`。
+>
+> ⚠️ **章节定位**：§1–§11 是 v1.0–v1.2 阶段的历史快照（含当时的文件数量、测试条数、
+> 解析链路 `splitter.py` 等），**不代表当前代码**。v1.3 起导入格式收敛为 JSON + Markdown、
+> 文本切分管线已整体删除，现状一律以 **§12** 为准。下表 §1 的「59 passed」等数字同理，
+> 当前基线是 **165 passed**（见 §12.4）。
 
 ---
 
@@ -878,7 +882,7 @@ PRD v1.3.6 写「删除中间选项时后续字母前移（删 B 后 C→B）」
 
 ```
 $ cd backend && python -m pytest -q
-162 passed, 1 warning in 8.27s
+165 passed, 1 warning in 12.62s
 $ cd frontend && npm run build      # tsc --noEmit 零错误 + vite build 通过
 ```
 
@@ -908,3 +912,27 @@ $ cd frontend && npm run build      # tsc --noEmit 零错误 + vite build 通过
 2. Markdown 单文件恒 1 个题库（`# 标题` 不作为题库名），按标题分片留待后续。
 3. 前端「题干至少 3 字」比后端更严：后端 `POST` 仅拦空题干，1–2 字交 `empty_stem` 异常，
    两条路径面向场景不同，已在 `utils/questionForm.ts` 文件头注明。
+
+## 12.7 QA 第一轮验收与修复（QA 报告 → 本节）
+
+QA 严过关对 HEAD `3600418` 独立复验：自动化 5 项全绿（pytest 162 / tsc / build / smoke 35 / e2e 33）、
+手工 103 组断言 101 PASS，**报出 1 个阻塞级缺陷**，已修复并补回归。
+
+| # | 问题 | 根因 | 修复 |
+|---|---|---|---|
+| 阻塞-1 | 手录时题库名与已导入文件同名 → 题目写进导入库，且不产生 manual 库（UI 下拉直接列导入库，正常操作即触发） | `db.find_manual_library()` 只按 `filename` 查，缺 `file_type='manual'`；`LIBRARY_AGGREGATE_SQL` 也按 `filename` 单键分组 | `find_manual_library` 加 `AND file_type = config.MANUAL_FILE_TYPE`；聚合改为 `GROUP BY f.filename, f.file_type` |
+| 一般-2 | 同名手录库与导入库在 `/api/libraries` 被合并成 1 条（`kind` 取最小 id 的 type） | 同上（聚合键） | 同上；现在同名不同型 → 两行，各自计数与 id 独立 |
+| 一般-3 | `---` 之后的行被并入上一题解析，与 README 描述不符 | 状态机在 ANALYSIS 阶段仍追加普通行 | 新增 `STATE_TAIL`：`---` 后丢弃到下一个 `## ` |
+| 文案-1/2 | README「这两种旧格式」实列三种；`/api/libraries` 说明漏 txt | —— | 逐条更正 |
+| 文案-3 | 前端 `ACCEPT_LABEL='JSON / MD'` 死代码，且上传区另拼 `JSON / MD / MARKDOWN` 与拒绝文案口径不一 | —— | 统一为 `ACCEPT_LABEL='JSON / Markdown'` 并被 `UploadDropzone` 引用 |
+| 体验-4 | 「保存并继续录入」后空表单立刻顶 3 条红字，像是保存失败 | 表单无「是否触碰」概念 | `QuestionForm` 增 `showMessages`，录题页以 `touched` 控制；清空/连续录入后静默 |
+
+新增回归用例（3 条）：
+- `test_api.py::test_create_question_isolates_from_imported_library`（同名导入库存在时手录仍建 manual 库、题号从 1 开始、导入库题数不变）
+- `test_api.py::test_libraries_do_not_merge_manual_and_imported_same_name`（同名两条、`kind` 分别为 md/manual、计数各自独立）
+- `test_markdown.py::test_analysis_stops_at_horizontal_rule`（`---` 后的尾巴不进解析）
+
+修复后基线：**165 passed**（162 + 3），`tsc --noEmit` 与 `vite build` 仍通过。
+
+QA 未覆盖（遗留到后续轮次）：真实 NAS / docker 构建、真实 drag&drop 事件、Firefox/Safari 与 375px 窄屏、
+万题性能回归、并发首存竞态（`import_files` 无 `(filename,file_type)` 唯一索引，理论上并发可能建出两条同名 manual 库）。

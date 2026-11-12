@@ -23,6 +23,7 @@ export default function QuestionCreatePage(): JSX.Element {
   const [libraries, setLibraries] = useState<LibraryItem[]>([]);
   const [librariesLoading, setLibrariesLoading] = useState(true);
   const [valid, setValid] = useState(false);
+  const [touched, setTouched] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -46,6 +47,12 @@ export default function QuestionCreatePage(): JSX.Element {
 
   const handleValidity = useCallback((result: QuestionFormValidation): void => {
     setValid(result.valid);
+  }, []);
+
+  /** 任何一次编辑才算「用户碰过表单」，此前不显示红字（避免空表单顶着 3 条报错）。 */
+  const handleChange = useCallback((next: QuestionFormValue): void => {
+    setTouched(true);
+    setValue(next);
   }, []);
 
   const submit = async (mode: 'view' | 'continue'): Promise<void> => {
@@ -77,6 +84,7 @@ export default function QuestionCreatePage(): JSX.Element {
         libraryName: value.libraryName,
         questionNo: '',
       });
+      setTouched(false);
       setNotice(
         `已保存第 ${result.question.question_no} 题到「${result.library.name}」${
           result.library.created ? '（新建题库）' : ''
@@ -116,10 +124,11 @@ export default function QuestionCreatePage(): JSX.Element {
         <QuestionForm
           mode="create"
           value={value}
-          onChange={setValue}
+          onChange={handleChange}
           libraries={libraries}
           librariesLoading={librariesLoading}
           onValidityChange={handleValidity}
+          showMessages={touched}
           disabled={saving}
         >
           <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
@@ -143,6 +152,7 @@ export default function QuestionCreatePage(): JSX.Element {
               disabled={saving}
               onClick={() => {
                 setValue(emptyQuestionForm(value.libraryName || DEFAULT_LIBRARY_NAME));
+                setTouched(false);
                 setNotice('');
                 setError('');
               }}

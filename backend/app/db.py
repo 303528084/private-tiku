@@ -410,28 +410,23 @@ LIBRARY_KINDS: frozenset[str] = frozenset({"manual", "json", "md", "docx", "txt"
 
 LIBRARY_AGGREGATE_SQL: str = """
 SELECT
-  (SELECT MIN(g.id) FROM import_files g WHERE g.filename = f.filename) AS id,
+  MIN(f.id) AS id,
   f.filename AS name,
-  (SELECT g.file_type FROM import_files g WHERE g.filename = f.filename
-     ORDER BY g.id ASC LIMIT 1) AS file_type,
-  (SELECT COUNT(*) FROM questions q
-     JOIN import_files g ON g.id = q.import_file_id
-     WHERE g.filename = f.filename) AS question_count,
-  COALESCE(
-    (SELECT MAX(q.updated_at) FROM questions q
-       JOIN import_files g ON g.id = q.import_file_id
-       WHERE g.filename = f.filename),
-    (SELECT MAX(g.created_at) FROM import_files g WHERE g.filename = f.filename)
-  ) AS last_updated
+  f.file_type AS file_type,
+  COUNT(q.id) AS question_count,
+  COALESCE(MAX(q.updated_at), MAX(f.created_at)) AS last_updated
 FROM import_files f
-GROUP BY f.filename
-HAVING question_count > 0
+LEFT JOIN questions q ON q.import_file_id = f.id
+GROUP BY f.filename, f.file_type
+HAVING COUNT(q.id) > 0
 ORDER BY last_updated DESC, name ASC
 LIMIT ?
 """
 """题库下拉数据源的聚合查询（架构 §3）。
 
-* 按 ``filename`` 分组：同名历史 docx 多次导入合并为一条；
+* 按 ``(filename, file_type)`` 分组：同名历史 docx 多次导入合并为一条，但
+  **手录库（``manual``）与同名导入库不会被合并**——否则手录题与导入题会串成一条，
+  用户在详情页看到的来源与题库类型都会失真（v1.3 QA 阻塞-1）。
 * ``id`` = 组内最小 ``import_files.id``（手录复用同一条记录，天然稳定）；
 * ``question_count`` = 组内题目数合计，过滤掉 0 题的记录；
 * ``last_updated`` = ``MAX(questions.updated_at)``，全空时兜底 ``MAX(import_files.created_at)``
@@ -443,7 +438,11 @@ LIMIT ?
 def find_manual_library(
     conn: sqlite3.Connection, name: str
 ) -> Optional[Dict[str, Any]]:
-    """按名称查找题库载体（``import_files``），返回 id 最小那条的记录。
+    """按名称查找**手录**题库载体（``import_files``），返回 id 最小那条的记录。
+
+    必须限定 ``file_type='manual'``：否则手录时若题库名与某个已导入的 md/json 文件同名，
+    题目会被写进那条导入记录，造成「手录题污染导入库、且不产生 manual 库」的数据错误
+    （v1.3 QA 阻塞-1）。同名导入库此刻应另建一条 ``manual`` 记录。
 
     Args:
         conn: 数据库连接。
@@ -453,8 +452,8 @@ def find_manual_library(
         记录 dict（含 ``id`` / ``import_id`` / ``filename`` / ``file_type``），无则 ``None``。
     """
     row = conn.execute(
-        "SELECT * FROM import_files WHERE filename = ? ORDER BY id ASC LIMIT 1",
-        (str(name),),
+        "SELECT * FROM import_files WHERE filename = ? AND file_type = ? ORDER BY id ASC LIMIT 1",
+        (str(name), config.MANUAL_FILE_TYPE),
     ).fetchone()
     return dict(row) if row is not None else None
 
