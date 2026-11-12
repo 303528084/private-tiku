@@ -125,7 +125,7 @@ export default function Layout({ children }: LayoutProps): JSX.Element {
       >
         <Toolbar variant="dense">
           <Typography variant="subtitle2" color="text.secondary">
-            DOCX / TXT / PDF 批量导入 · 规则解析 · 全文检索 · 异常校对 · 一键导出
+            DOCX / TXT / PDF / JSON 批量导入 · 规则解析 · 全文检索 · 异常校对 · 一键导出
           </Typography>
         </Toolbar>
       </AppBar>

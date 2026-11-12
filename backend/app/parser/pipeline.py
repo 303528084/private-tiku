@@ -1,7 +1,13 @@
 """解析管线编排：reader → normalize → splitter → extractor → validator。
 
-对外只暴露 ``run(path)`` 与 ``run_lines(lines)``；``imports`` API 直接消费
-``PipelineResult.items`` 落库。
+对外暴露三类入口：
+
+* ``run_lines(lines)`` / ``run(path)``：文本类文件（DOCX/TXT/PDF）→ 单个
+  :class:`PipelineResult`，兼容既有调用方。
+* ``run_parts(path)``：统一入口，返回**按题库分片**的结果列表。文本类文件恒为
+  一个分片；JSON 题库文件可能包含多个题库（``{"banks": [...]}``），每个题库
+  各自成片，从而保留「题库标题 / 作者」这层来源信息。
+* ``imports`` API 一律走 ``run_parts``，一个分片落一条 ``import_files`` 记录。
 """
 
 from __future__ import annotations
@@ -10,7 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List
 
-from . import reader, splitter
+from . import jsonbank, reader, splitter
 from .extractor import Parsed, extract
 from .normalize import normalize
 from .reader import Line
@@ -29,6 +35,31 @@ class ParsedItem:
 class PipelineResult:
     """一次文件解析的完整结果。"""
 
+    items: List[ParsedItem] = field(default_factory=list)
+    line_count: int = 0
+    block_count: int = 0
+
+    @property
+    def question_count(self) -> int:
+        """题目数量。"""
+        return len(self.items)
+
+    @property
+    def anomaly_count(self) -> int:
+        """异常总条数。"""
+        return sum(len(item.anomalies) for item in self.items)
+
+
+@dataclass
+class PartResult:
+    """一个「题库分片」的解析结果。
+
+    文本类文件恒为单分片（``name`` = 原始文件名）；JSON 多题库包按题库分片，
+    ``name`` 为「题库标题（作者）.json」。一个分片对应库里一条 ``import_files``
+    记录，题目挂在该记录下，因此来源信息不会在合并导入时丢失。
+    """
+
+    name: str
     items: List[ParsedItem] = field(default_factory=list)
     line_count: int = 0
     block_count: int = 0
@@ -70,7 +101,71 @@ def run_lines(raw_lines: List[Line]) -> PipelineResult:
     return PipelineResult(items=items, line_count=len(lines), block_count=len(blocks))
 
 
-def run(path: Path | str) -> PipelineResult:
-    """解析单个文件（任一读取失败抛 ReaderError）。"""
+def _run_text(path: Path | str) -> PipelineResult:
+    """文本类文件（DOCX/TXT/PDF）：reader → normalize → splitter → extractor → validator。"""
     raw_lines = reader.read(path)
     return run_lines(raw_lines)
+
+
+def run(path: Path | str) -> PipelineResult:
+    """解析单个文件（任一读取失败抛 ``ReaderError``）。
+
+    JSON 题库文件会被展开为全部题库的题目合集（``block_count`` 取题目数）；
+    需要保留题库来源时改用 :func:`run_parts`。
+    """
+    parts = run_parts(path)
+    if len(parts) == 1:
+        part = parts[0]
+        return PipelineResult(
+            items=part.items, line_count=part.line_count, block_count=part.block_count
+        )
+    items = [item for part in parts for item in part.items]
+    return PipelineResult(items=items, line_count=0, block_count=len(items))
+
+
+def run_parts(path: Path | str, display_name: str | None = None) -> List[PartResult]:
+    """按题库分片解析单个文件（读取/格式错误抛 ``ReaderError``）。
+
+    文本类文件恒返回 1 个分片；JSON 多题库包返回 N 个分片。
+
+    ``display_name``：落盘文件名可能被改成 UUID，传入原始上传文件名以保留可读
+    来源；JSON 多题库包只在「单题库」时采用它（多题库用各自标题，更有信息量）。
+    """
+    file_path = Path(path)
+    if file_path.suffix.lower() == ".json":
+        banks = jsonbank.load_banks(file_path)
+        if display_name and len(banks) == 1:
+            banks[0].name = display_name
+        return [_bank_part(bank) for bank in banks]
+
+    result = _run_text(file_path)
+    return [
+        PartResult(
+            name=display_name or file_path.name,
+            items=result.items,
+            line_count=result.line_count,
+            block_count=result.block_count,
+        )
+    ]
+
+
+def _bank_part(bank: jsonbank.RawBank) -> PartResult:
+    """把 JSON 题库映射为分片结果。
+
+    题号重复处理：这类导出常见「按题型分段编号」（判断题 1..14、单选题 1..25、
+    多选题 1..12 各自从 1 开始），重号是编号习惯而非解析错误。此时按文件内
+    出现顺序重排为 1..n，既避免 duplicate_number 误报，也保证展示与导出里
+    「题号」唯一可引用；无重号时原样保留原始题号。
+    """
+    numbers = [question.no for question in bank.questions]
+    if len(set(numbers)) != len(numbers):
+        for index, question in enumerate(bank.questions, start=1):
+            question.no = str(index)
+
+    counter = build_counter([question.no for question in bank.questions])
+    items = [
+        ParsedItem(parsed=question, anomalies=validate(question, counter))
+        for question in bank.questions
+    ]
+    return PartResult(name=bank.name, items=items, line_count=0, block_count=len(items))
+

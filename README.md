@@ -1,6 +1,6 @@
 # private-tiku · 私有护理题库系统
 
-把散乱的护理试题文档（DOCX / TXT / PDF）变成**秒级可检索、可校对异常**的私有题库，数据全部留在内网与本地磁盘。
+把散乱的护理试题文档（DOCX / TXT / PDF / JSON）变成**秒级可检索、可校对异常**的私有题库，数据全部留在内网与本地磁盘。
 
 - **批量导入**：多文件拖拽上传，单次 ≥20 个文件，同步解析后先暂存、确认才入库
 - **规则解析**：题号 / 题干 / 选项 / 答案 / 解析 / 题型（单选・多选・判断）自动识别，纯正则 + 状态机，可解释可复现
@@ -79,7 +79,8 @@ private-tiku/
 │       ├── models.py        # Pydantic schema + 枚举 + 错误码
 │       ├── api/             # imports / questions / search / anomalies / export
 │       ├── parser/          # reader → normalize → splitter → extractor → validator → pipeline
-│       └── tests/           # test_parser.py + fixtures
+│       │                    # jsonbank.py：结构化 JSON 题库直接映射（不走文本切分）
+│       └── tests/           # test_parser / test_api / test_jsonbank / test_regressions / test_accuracy
 └── frontend/
     ├── vite.config.ts       # base '/'，dev 代理 /api
     ├── tailwind.config.js   # 关闭 preflight，避免与 MUI 冲突
@@ -93,7 +94,7 @@ private-tiku/
 
 ## 3. 使用流程
 
-1. **导入**：`导入文档` → 拖入 DOCX/TXT/PDF → 上传后立即解析 → 「预览」查看每个文件的题数与异常数
+1. **导入**：`导入文档` → 拖入 DOCX/TXT/PDF/JSON → 上传后立即解析 → 「预览」查看每个文件的题数与异常数
 2. **入库**：点「全部入库」（`POST /api/imports/{id}/commit`），题目从 `pending` 变 `published` 后才可被检索
 3. **搜索**：首页输入关键词（空格分隔多关键词，AND 语义），支持按题型 / 仅看异常 / 来源文档筛选
 4. **校对**：`异常校对` 页按类型筛选，逐题「标记已校对」；点「查看/编辑」直接修改题干、选项、答案、解析，保存后**自动重算异常**
@@ -138,6 +139,34 @@ HTTP 状态码同步（400/404/422/500），响应 body 仍是统一结构。
 - **答案规范化**：多选字母升序大写（`dba` → `ABD`）；判断统一 `√` / `×`（对/正确/T/√ → `√`）
 - **文件编码**：TXT 用 chardet 探测（GBK/GB18030/UTF-8 自动识别），PDF 走 pdfplumber（扫描件不支持，会标记 `parse_error`）
 
+### JSON 题库（结构化导入）
+
+`.json` 不走文本切分，直接做字段映射（`app/parser/jsonbank.py`），因此不受题号正则、
+答案行覆盖等文本解析风险影响。支持的三种形态：
+
+```jsonc
+// ① 单题库包
+{"title": "…", "author": "…", "source_file": "…", "questions": [ {...} ]}
+// ② 扁平数组
+[ {"title": "题干", "type": "single_choice", "options": "A: 甲\rB: 乙", "answer": "A"} ]
+// ③ 多题库合并包（每个题库单独成为一条「文件」记录，保留标题与作者）
+{"banks": [ {"title": "…", "author": "…", "questions": [ ... ]} ]}
+```
+
+字段兼容：题干 `content|stem|title|question|body`；题型中英文（判断题/单选题/多选题、
+judge/single_choice/multiple_choice…）；选项 `{"A":"…"}`、`A: 甲\rB: 乙` 分隔文本、
+单行 `A. 甲 B. 乙` 或列表；答案字符串或列表（`["A","C"]` 等价 `"AC"`）；解析
+`explanation|analysis|解析`；题号 `number|no|index`（缺省按顺序补 1..n）。
+
+归一规则：
+
+- **判断题折叠**：`A: 正确 / B: 错误` 两个选项折叠为空选项，答案 A/B 映射为 `√`/`×`
+- **题型以答案为准**：声明为单选但答案是 `ABD` 时按多选入库，避免答案字母被截断
+- **分段编号重排**：一份题库里「判断 1..14、单选 1..25、多选 1..12」各自从 1 开始时，
+  按出现顺序重排为 1..n（否则会出现大量假 `duplicate_number`，且导出标题重号）；
+  无重号时原题号原样保留
+- **编码**：UTF-8（含 BOM）与 GB18030 自动识别；非法 JSON 报「第 N 行第 M 列」
+
 ---
 
 ## 6. 测试
@@ -169,6 +198,9 @@ cd backend && python scripts/gen_fixtures.py
 4. **题库规模**：按万级题量设计；十万级需迁移独立检索引擎（接口已隔离在 `api/search.py`）。
 5. **删除题目**：删除后 FTS 索引由触发器同步清理，但 SQLite 文件不会立即收缩（可用 `VACUUM` 手动整理）。
 6. **`python-docx` 只读段落与表格**，图片 / 文本框内的文字不会被提取。
+7. **JSON 题库的题号可能被重排**：源文件按题型分段编号（各自从 1 开始）时，为保证「题号」
+   唯一可引用会重排为 1..n，与原始卷面题号不再一一对应；如需保留原题号，请提供本身唯一的编号。
+8. **JSON 的 `explanation` 落「解析」字段**：部分导出把「标准名-章节」写在该字段，界面上会显示为解析。
 
 ---
 

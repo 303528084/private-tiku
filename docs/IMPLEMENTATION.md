@@ -742,3 +742,104 @@ $ cd frontend && npm run build    → ✓ 998 modules transformed，✓ built in
   `（A）` / `（  ）` / `（12345）` 守卫、以及「不用题号序列」的原则。
 * **代价**：多出一个残留限制（连续括号编号且前题既无选项又无答案时仍并块），
   已连同「该块不产生任何异常、需人工核对」的风险点一并记在 §10.2「残留限制」。
+
+---
+
+# 11. v1.2：结构化 JSON 题库导入
+
+## 11.1 需求与动机
+
+现成资料是一批「已结构化」的护理试题 JSON（29 个单题库文件 + 1 个多题库合并包 +
+1 个扁平导出），字段规整、答案确定。若强行转成 DOCX/TXT 再走文本切分，等于先把
+结构化数据降级成易错文本，再赌解析器不出错。因此新增一条**直通映射**通道：
+`.json` 不走 `splitter`/`extractor`，只做字段映射，异常判定仍复用 `validator`。
+
+## 11.2 新增 / 改动文件
+
+| 文件 | 类型 | 说明 |
+|---|---|---|
+| `backend/app/parser/jsonbank.py` | 新增 | JSON 形态识别 + 字段映射（~340 行） |
+| `backend/app/parser/pipeline.py` | 改 | 新增 `PartResult` 与 `run_parts()`；`run()` 改为其薄封装 |
+| `backend/app/api/imports.py` | 改 | 一个上传可产出多个「题库分片」，每片一条 `import_files` 记录 |
+| `backend/app/config.py` | 改 | `ALLOWED_EXT` / `FILE_TYPE_BY_EXT` 增加 `.json`，新增 `ALLOWED_EXT_HINT` |
+| `backend/app/parser/__init__.py` | 改 | 导出 `PartResult` / `run_parts` |
+| `frontend/src/components/UploadDropzone.tsx` | 改 | `accept` 与提示文案加入 JSON |
+| `frontend/src/pages/ImportPage.tsx` | 改 | 页面说明补一句 JSON 行为 |
+| `backend/app/tests/test_jsonbank.py` | 新增 | 30 条用例（映射 / 归一 / 编码 / 异常 / HTTP 端到端） |
+| `README.md` | 改 | §5 新增「JSON 题库」小节；§3 / §7 同步 |
+
+`docs/PRD.md`、`docs/ARCHITECTURE.md` 未改动；未引入任何新依赖（标准库 `json`）。
+
+## 11.3 支持的三种形态
+
+```jsonc
+① {"title": "…", "author": "…", "source_file": "…", "questions": [ {...} ]}
+② [ {"title": "题干", "type": "single_choice", "options": "A: 甲\rB: 乙", "answer": "A"} ]
+③ {"banks": [ {"title": "…", "author": "…", "questions": [ ... ]} ]}
+```
+
+宽松兜底：题库对象放在 `data` 下（`{"data": {...}}` / `{"data": [...]}`）也能识别；
+`questions` 为 `id → 题目` 的 dict 时取 `values()`；题目数组的键名兼容
+`questions / items / rows / list / question_list`。
+
+## 11.4 字段映射与归一（4 条必须记录的决策）
+
+1. **判断题折叠**：源数据 `判断题` 带 `{"A":"正确","B":"错误"}`，而本系统判断题
+   约定「无选项 + 答案 `√`/`×`」。若原样入库会出现「judge 带 A/B 选项、答案为 B」，
+   与既有题库（文本导入）不一致，导出也混乱。因此把这对二选一折叠为空选项，
+   A/B 映射为 `√`/`×`；选项顺序颠倒（A=错误）时按内容而不是字母映射。
+2. **题型以答案为准**：声明 `单选题` 但答案是 `ABD` 时按 `multiple` 入库。若照声明
+   走 `single`，`normalize_answer` 会只保留第一个字母，属于**静默丢数据**。
+   声明为选择类且答案为空时保留声明（让 `missing_answer` 正常报出）。
+3. **分段编号重排**：这批数据的题号是**按题型分段**的（判断题 1..14、单选题 1..25、
+   多选题 1..12 各自从 1 开始）。直接入库会产生两类问题：
+   - 每份文件几十条假 `duplicate_number`（首轮实测 29 份共 1368 条）；
+   - 导出/详情里「题号 1」重复出现，无法引用。
+   因此**仅当同一题库内出现重号时**，按出现顺序重排为 `1..n`；无重号时原题号原样保留。
+   代价：与卷面原始题号不再一一对应（已写入 README §7 已知限制 7）。
+4. **一题库一片**：`{"banks": [...]}` 的每个题库各自成为一条 `import_files` 记录
+   （名称取「标题（作者）.json」），而不是把 872 题塞进一条以文件名命名的记录。
+   这样「来源」列能显示具体标准名，导出 Markdown 的分组也有意义；未新增任何 DB 字段。
+
+## 11.5 真实数据验证（29 个单题库文件，872 题）
+
+```
+导入 29 个文件 → 题目 872 / 未处理异常 10
+异常类型分布: {too_few_options: 7, missing_answer: 2, missing_options: 1}
+  样例（均为源数据真实缺陷，非解析错误）：
+    8  [single] too_few_options :: 仅识别到 3 个选项（A、C、D），少于 4 个
+    8  [single] missing_answer  :: 未识别到答案，需人工补充
+    5  [judge]  missing_answer  :: 未识别到答案，需人工补充
+检索（872 题库）：无菌敷料 9 命中 / 中心静脉导管 63 / PICC 279，took_ms 3–4ms，`<mark>` 高亮正常
+导出：md 354,647 B、json 622,242 B，Content-Disposition 附件名正常
+```
+
+多题库合并包（`全部试题合并.json`）→ 29 个分片、872 题、10 条异常，与逐文件导入
+结果一致；扁平数组导出（872 题）→ 1 个分片、872 题、同样 10 条异常。
+
+**注意**：合并包与扁平导出是同一批题的重复导出，与 29 个单文件**不要同时导入**，
+否则同一题会有 2–3 份副本（首轮混导实测 2616 题 = 872 × 3）。
+
+## 11.6 回归
+
+```
+$ python -m pytest -q
+163 passed, 1 warning in 7.69s     # 原 133 + 新增 test_jsonbank.py 30 条
+```
+
+原有 133 条（解析 73 / API 28 / 回归 28 / 准确率 4）全部保持通过，说明文本导入
+路径（含 `import_files.filename` 取原始上传名、`total_files` 计数）未被这次改动破坏。
+
+## 11.7 新增偏离与限制
+
+1. **`imports.total_files` 语义微调**：由「上传文件数」改为「文件记录数」。文本导入
+   两者恒等；JSON 多题库包一个文件会产出 N 条记录，因此该值等于 N（与
+   `ok_files + failed_files` 自洽，UI 显示不会出现加不平）。
+2. **`run()` 行为扩展**：对 `.json` 返回全部题库的题目合集（`block_count` = 题目数）。
+   既有调用方只传文本文件，行为不变。
+3. **JSON 不产生 `duplicate_number`**：重排后已无重号；结构化输入的「重号」多为分段
+   编号习惯，不属于解析错误，故不再用该异常告警。
+4. **`explanation` 落到「解析」字段**：这批数据该字段写的是「标准名-章节」，界面上
+   会显示为解析内容（信息不丢，位置语义略有偏差；未新增字段以保持 DB 与 API 契约稳定）。
+5. **不做 JSON Schema 校验**：字段缺失、类型异常按「尽力映射 + 6 类异常」处理，
+   单题映射失败只标 `parse_error`，不整批失败（与文本导入的容错策略一致）。

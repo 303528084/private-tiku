@@ -130,6 +130,7 @@ export default function ImportPage(): JSX.Element {
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
         上传后立即同步解析，解析结果先暂存为「待入库」，确认后才会进入检索库。
+        支持 DOCX / TXT / PDF 与结构化 JSON 题库；JSON 多题库包会按题库分列来源。
       </Typography>
 
       <Paper variant="outlined" sx={{ p: 2, mb: 2, borderRadius: 2 }}>

@@ -144,10 +144,11 @@ async def create_import(
             "file_type": config.FILE_TYPE_BY_EXT.get(suffix, suffix.lstrip(".") or "unknown"),
             "ok": False,
             "error": "",
-            "result": None,
+            # 一个文件可产出多个题库分片（JSON 多题库包）；文本类恒为 1 个
+            "parts": [],
         }
         if suffix not in config.ALLOWED_EXT:
-            entry["error"] = "不支持的文件类型，仅接受 .docx/.txt/.pdf"
+            entry["error"] = f"不支持的文件类型，仅接受 {config.ALLOWED_EXT_HINT}"
             staged.append(entry)
             continue
         try:
@@ -176,7 +177,7 @@ async def create_import(
             continue
 
         try:
-            entry["result"] = pipeline.run(target)
+            entry["parts"] = pipeline.run_parts(target, display_name=filename)
             entry["ok"] = True
         except ReaderError as exc:
             entry["error"] = str(exc)
@@ -184,60 +185,65 @@ async def create_import(
             entry["error"] = f"解析失败：{exc}"
         staged.append(entry)
 
-    # 3) 单事务写库
+    # 3) 单事务写库（一个题库分片 = 一条 import_files 记录）
     ok_files = 0
     failed_files = 0
     total_questions = 0
     file_payloads: List[Dict[str, Any]] = []
     with db.get_conn() as conn:
         for entry in staged:
-            result: Optional[pipeline.PipelineResult] = entry["result"]
-            if entry["ok"] and result is not None:
-                status = FileStatus.parsed.value
-                question_count = result.question_count
-                ok_files += 1
-            else:
-                status = FileStatus.failed.value
-                question_count = 0
-                failed_files += 1
-            cursor = conn.execute(
-                """
-                INSERT INTO import_files (import_id, filename, file_type, status, error, total_questions)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    import_id,
-                    entry["filename"],
-                    entry["file_type"],
-                    status,
-                    entry["error"],
-                    question_count,
-                ),
+            entry_ok = bool(entry["ok"])
+            parts: List[pipeline.PartResult] = (
+                list(entry["parts"]) if entry_ok else [pipeline.PartResult(name=entry["filename"])]
             )
-            file_id = int(cursor.lastrowid)
-            anomaly_count = 0
-            if status == FileStatus.parsed.value and result is not None:
-                anomaly_count = _insert_parsed_items(conn, file_id, result.items)
-                total_questions += question_count
-            # 冗余列仅作历史快照；读取侧一律用实时聚合（v1.1 D1）
-            conn.execute(
-                "UPDATE import_files SET anomaly_count = ? WHERE id = ?",
-                (anomaly_count, file_id),
-            )
-            file_payloads.append(
-                {
-                    "file_id": file_id,
-                    "id": file_id,
-                    "filename": entry["filename"],
-                    "file_type": entry["file_type"],
-                    "status": status,
-                    "error": entry["error"],
-                    "total_questions": question_count,
-                    "committed_questions": 0,
-                    "anomaly_count": anomaly_count,
-                    "anomaly_total": anomaly_count,
-                }
-            )
+            for part in parts:
+                if entry_ok and part.question_count > 0:
+                    status = FileStatus.parsed.value
+                    question_count = part.question_count
+                    ok_files += 1
+                else:
+                    # 失败文件 / 空分片仍留一条记录便于溯源（v1.0 行为）
+                    status = FileStatus.failed.value
+                    question_count = 0
+                    failed_files += 1
+                cursor = conn.execute(
+                    """
+                    INSERT INTO import_files (import_id, filename, file_type, status, error, total_questions)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        import_id,
+                        part.name,
+                        entry["file_type"],
+                        status,
+                        entry["error"],
+                        question_count,
+                    ),
+                )
+                file_id = int(cursor.lastrowid)
+                anomaly_count = 0
+                if status == FileStatus.parsed.value:
+                    anomaly_count = _insert_parsed_items(conn, file_id, part.items)
+                    total_questions += question_count
+                # 冗余列仅作历史快照；读取侧一律用实时聚合（v1.1 D1）
+                conn.execute(
+                    "UPDATE import_files SET anomaly_count = ? WHERE id = ?",
+                    (anomaly_count, file_id),
+                )
+                file_payloads.append(
+                    {
+                        "file_id": file_id,
+                        "id": file_id,
+                        "filename": part.name,
+                        "file_type": entry["file_type"],
+                        "status": status,
+                        "error": entry["error"],
+                        "total_questions": question_count,
+                        "committed_questions": 0,
+                        "anomaly_count": anomaly_count,
+                        "anomaly_total": anomaly_count,
+                    }
+                )
 
         final_status = (
             ImportStatus.pending_confirm.value if ok_files > 0 else ImportStatus.failed.value
@@ -245,17 +251,17 @@ async def create_import(
         conn.execute(
             """
             UPDATE imports
-            SET status = ?, ok_files = ?, failed_files = ?, total_questions = ?
+            SET status = ?, total_files = ?, ok_files = ?, failed_files = ?, total_questions = ?
             WHERE id = ?
             """,
-            (final_status, ok_files, failed_files, total_questions, import_id),
+            (final_status, len(file_payloads), ok_files, failed_files, total_questions, import_id),
         )
 
     if ok_files == 0:
         only_type_error = all("不支持的文件类型" in item["error"] for item in file_payloads)
         if only_type_error:
             raise ApiError(
-                "全部文件类型不受支持，仅接受 .docx/.txt/.pdf",
+                f"全部文件类型不受支持，仅接受 {config.ALLOWED_EXT_HINT}",
                 CODE_UNSUPPORTED_TYPE,
                 422,
                 {"import_id": import_id, "files": file_payloads},

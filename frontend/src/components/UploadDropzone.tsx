@@ -4,7 +4,7 @@ import type { ChangeEvent, DragEvent } from 'react';
 import { Alert, Box, Button, Stack, Typography } from '@mui/material';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 
-const ACCEPT_EXT = ['.docx', '.txt', '.pdf'];
+const ACCEPT_EXT = ['.docx', '.txt', '.pdf', '.json'];
 const MAX_FILE_SIZE = 20 * 1024 * 1024;
 const MAX_FILES = 20;
 
@@ -41,7 +41,7 @@ export default function UploadDropzone({
     const accepted = files.filter((file) => isAccepted(file) && file.size <= MAX_FILE_SIZE);
 
     if (rejectedType.length > 0) {
-      setError(`已忽略 ${rejectedType.length} 个不支持的文件（仅接受 DOCX / TXT / PDF）`);
+      setError(`已忽略 ${rejectedType.length} 个不支持的文件（仅接受 DOCX / TXT / PDF / JSON）`);
     } else if (rejectedSize.length > 0) {
       setError(`已忽略 ${rejectedSize.length} 个超过 20MB 的文件`);
     }
@@ -98,7 +98,7 @@ export default function UploadDropzone({
       >
         <Stack spacing={1} alignItems="center">
           <CloudUploadIcon color="primary" sx={{ fontSize: 42 }} />
-          <Typography variant="subtitle1">拖拽 DOCX / TXT / PDF 到此，或点击选择文件</Typography>
+          <Typography variant="subtitle1">拖拽 DOCX / TXT / PDF / JSON 到此，或点击选择文件</Typography>
           <Typography variant="caption" color="text.secondary">
             支持多文件批量上传（单次最多 {maxFiles} 个，单个不超过 20MB）
           </Typography>

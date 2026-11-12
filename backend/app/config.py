@@ -39,10 +39,13 @@ MAX_FILES_PER_REQUEST: int = 20
 MAX_FILE_SIZE: int = 20 * 1024 * 1024
 """单个文件大小上限（字节）。"""
 
-ALLOWED_EXT: frozenset[str] = frozenset({".docx", ".txt", ".pdf"})
-"""允许上传的扩展名（小写，含点）。"""
+ALLOWED_EXT: frozenset[str] = frozenset({".docx", ".txt", ".pdf", ".json"})
+"""允许上传的扩展名（小写，含点）。``.json`` 走结构化映射，不做文本切分。"""
 
-FILE_TYPE_BY_EXT: dict[str, str] = {".docx": "docx", ".txt": "txt", ".pdf": "pdf"}
+FILE_TYPE_BY_EXT: dict[str, str] = {".docx": "docx", ".txt": "txt", ".pdf": "pdf", ".json": "json"}
+
+ALLOWED_EXT_HINT: str = ".docx/.txt/.pdf/.json"
+"""错误文案里展示的受支持扩展名（与 ``ALLOWED_EXT`` 必须同步）。"""
 
 # ---------------------------------------------------------------------------
 # 检索 / 分页
