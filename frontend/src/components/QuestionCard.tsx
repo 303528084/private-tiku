@@ -62,9 +62,11 @@ export default function QuestionCard({
       {letters.length > 0 ? (
         <div className="option-grid mt-2">
           {letters.map((letter) => (
-            <Typography component="div" variant="body2" key={letter} color="text.primary">
-              <span className="text-gray-500 mr-1">{letter}.</span>
-              <Highlight html={content.options[letter]} />
+            <Typography component="div" variant="body2" key={letter} color="text.primary" className="option-row">
+              <span className="option-letter">{letter}.</span>
+              <span className="option-text">
+                <Highlight html={content.options[letter]} />
+              </span>
             </Typography>
           ))}
         </div>
