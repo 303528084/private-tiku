@@ -6,6 +6,7 @@ import SearchPage from './pages/SearchPage';
 import ImportPage from './pages/ImportPage';
 import AnomalyPage from './pages/AnomalyPage';
 import QuestionDetailPage from './pages/QuestionDetailPage';
+import QuestionCreatePage from './pages/QuestionCreatePage';
 import StatsPage from './pages/StatsPage';
 
 /** 404 兜底页。 */
@@ -34,6 +35,8 @@ export default function App(): JSX.Element {
         <Route path="/import" element={<ImportPage />} />
         <Route path="/anomalies" element={<AnomalyPage />} />
         <Route path="/stats" element={<StatsPage />} />
+        {/* 必须排在 /questions/:id 之前，否则 "new" 会被当成 id */}
+        <Route path="/questions/new" element={<QuestionCreatePage />} />
         <Route path="/questions/:id" element={<QuestionDetailPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Routes>

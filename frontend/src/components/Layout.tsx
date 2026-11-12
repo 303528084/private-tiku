@@ -18,6 +18,7 @@ import UploadFileIcon from '@mui/icons-material/UploadFile';
 import SearchIcon from '@mui/icons-material/Search';
 import ReportProblemIcon from '@mui/icons-material/ReportProblem';
 import BarChartIcon from '@mui/icons-material/BarChart';
+import AddCircleOutlineIcon from '@mui/icons-material/AddCircleOutline';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
 import { api, toErrorMessage } from '../api/client';
 import type { StatsResult } from '../api/client';
@@ -32,6 +33,7 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { to: '/', label: '搜索题库', icon: <SearchIcon fontSize="small" /> },
+  { to: '/questions/new', label: '手动录题', icon: <AddCircleOutlineIcon fontSize="small" /> },
   { to: '/import', label: '导入文档', icon: <UploadFileIcon fontSize="small" /> },
   { to: '/anomalies', label: '异常校对', icon: <ReportProblemIcon fontSize="small" /> },
   { to: '/stats', label: '导入统计', icon: <BarChartIcon fontSize="small" /> },
@@ -125,7 +127,7 @@ export default function Layout({ children }: LayoutProps): JSX.Element {
       >
         <Toolbar variant="dense">
           <Typography variant="subtitle2" color="text.secondary">
-            DOCX / TXT / PDF / JSON 批量导入 · 规则解析 · 全文检索 · 异常校对 · 一键导出
+            JSON / Markdown 导入 · 手动录题 · 规则解析 · 全文检索 · 异常校对 · 一键导出
           </Typography>
         </Toolbar>
       </AppBar>

@@ -843,3 +843,68 @@ $ python -m pytest -q
    会显示为解析内容（信息不丢，位置语义略有偏差；未新增字段以保持 DB 与 API 契约稳定）。
 5. **不做 JSON Schema 校验**：字段缺失、类型异常按「尽力映射 + 6 类异常」处理，
    单题映射失败只标 `parse_error`，不整批失败（与文本导入的容错策略一致）。
+
+---
+
+# 12. v1.3：导入格式收敛 + 手动录题（提交 875a097 起）
+
+## 12.1 需求与范围
+
+用户两点诉求：①去掉 docx/TXT/PDF 导入，保留 JSON 并新增 Markdown；②支持手动添加题目，且答案可在答案区**点选填入**。
+
+v1.3 的取舍是「少而确定的输入」：docx/pdf 的解析误判几乎全部来自排版不确定性，而教研老师手上稳定的来源是
+JSON 导出与 Markdown 手写稿；零散真题则不该被迫先造一个文件，于是补了单题手录。
+
+需求与验收见 `docs/PRD.md` §v1.3（P0-6…P0-9），设计见 `docs/ARCHITECTURE.md` §v1.3。
+
+## 12.2 关键实现
+
+| 主题 | 做法 |
+|---|---|
+| 格式收敛 | `config.ALLOWED_EXT={.json,.md,.markdown}`；`reader.py` 只保留 `decode_bytes()`（chardet + 5 编码兜底）；删除 `python-docx`/`pdfplumber` 依赖与 `splitter.py` |
+| Markdown 解析 | 新增 `parser/markdown.py`：`HEADER/STEM/OPTION/ANSWER/ANALYSIS` 行级状态机 → `jsonbank.RawBank`，再由 `pipeline._bank_part()` 复用题号重排与 6 类异常校验；**不走**文本切分，避开括号题号歧义 |
+| 往返一致性 | `**来源**：`/`**异常标记**：` 行导入时丢弃（来源恒取文件名）；`（题干为空）`/`（无答案）` 占位符还原为空值 → 导出 md 可原样再导入 |
+| 手动录题 | `POST /api/questions`：题库名缺省「手动录入」，`import_files` 即题库载体（`file_type='manual'`），同名库复用；题号留空取该库数字题号 max+1；直接 `published`，异常照常落库 |
+| 题库下拉 | `GET /api/libraries`：按 `filename` 聚合（含历史 docx/pdf 来源），按最近更新倒序 |
+| 点选答案 | 前端 `AnswerPicker`（受控 Chip）+ `utils/questionForm.ts` 纯函数：单选点同字母取消、多选升序并入/移除、判断 √× 互斥；未填内容的选项置灰 |
+| 表单复用 | `QuestionForm` 由「手动录题页」与「详情编辑页」共用，校验集中在纯函数，页面只消费 `valid` |
+
+## 12.3 与 PRD 的一处偏离（已确认）
+
+PRD v1.3.6 写「删除中间选项时后续字母前移（删 B 后 C→B）」，实现**未**采纳：字母前移会静默改写答案字母，
+且与 v1.2 详情页既有行为（只删该字母）不一致。改为「删哪个只删哪个，新增选项补首个未用字母，答案中被删字母同步移除」。
+
+## 12.4 测试口径
+
+```
+$ cd backend && python -m pytest -q
+162 passed, 1 warning in 8.27s
+$ cd frontend && npm run build      # tsc --noEmit 零错误 + vite build 通过
+```
+
+用例迁移（不是删除）：
+- `test_accuracy.py` 整文件下线（4 条），由「导出 → 导入 → 再导出逐字节相等」替代，
+  另有 API 级闭环 `test_export_import_export_via_api_is_byte_identical`
+- `test_parser.py` 中 reader/splitter/extract 用例（约 25 条）随文本管线一起下线，
+  由 `test_markdown.py` 的变体矩阵（18 条：题型标记、选项 4 种写法、判断题折叠、占位符、重号重排、行号报错、GBK/BOM/CRLF）承接
+- `test_api.py` / `test_regressions.py` 的 txt 样本全部改写为等价 md 样本（题量、答案、异常数不变），
+  FTS/LIKE 双路径、通配符转义、XSS、导出、异常计数四视图恒等、级联删除等**未删一条**
+- 新增 `test_text_parity.py`：断言后端 `UNSUPPORTED_EXT_TEMPLATE` 与前端 `constants/import.ts::unsupportedExtMessage()` 字面量一致
+
+## 12.5 手工验收（Playwright + 真实服务）
+
+| 场景 | 结果 |
+|---|---|
+| 点选 B → 答案 `B`；再点 D → `BD`；再点 B → `D`；补回 B → `BD` | 与规则一致（升序归并、再点移除） |
+| 保存 → 跳 `/questions/53`，详情页答案回填 `BD` | 通过 |
+| 详情页切「判断题」 | 选项区消失、答案清空；点 √ → 答案 `√` |
+| 上传 `v13_demo.md`（3 题：单选/判断/三选项多选） | 解析 3 题、1 条 `too_few_options` 异常，`**来源**：` 行未生效（来源仍为文件名） |
+| 同批混入 `legacy.docx` | 前端逐文件提示、后端 422/42201，文案与 README 一致 |
+| 搜索页卡片 | 选项竖排、答案与来源正常 |
+
+## 12.6 遗留
+
+1. 手动录题的题库会出现在「导入批次」列表（复用 `import_files` 的必然结果，已写入 §7 已知限制）。
+2. Markdown 单文件恒 1 个题库（`# 标题` 不作为题库名），按标题分片留待后续。
+3. 前端「题干至少 3 字」比后端更严：后端 `POST` 仅拦空题干，1–2 字交 `empty_stem` 异常，
+   两条路径面向场景不同，已在 `utils/questionForm.ts` 文件头注明。

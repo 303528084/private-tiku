@@ -26,6 +26,7 @@ import { api, toErrorMessage } from '../api/client';
 import type { ImportDetail, ImportRecord } from '../api/client';
 import StatusChip from '../components/StatusChip';
 import UploadDropzone from '../components/UploadDropzone';
+import { MD_TEMPLATE, downloadMarkdownTemplate } from '../constants/import';
 
 interface Feedback {
   severity: 'success' | 'info' | 'warning' | 'error';
@@ -130,8 +131,44 @@ export default function ImportPage(): JSX.Element {
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
         上传后立即同步解析，解析结果先暂存为「待入库」，确认后才会进入检索库。
-        支持 DOCX / TXT / PDF 与结构化 JSON 题库；JSON 多题库包会按题库分列来源。
+        v1.3 起支持 <b>结构化 JSON</b> 与 <b>Markdown</b> 两种格式：JSON 多题库包会按题库分列来源，
+        一个 Markdown 文件 = 一个题库；系统导出的 md 可原样再导入。
       </Typography>
+
+      <details className="mb-4">
+        <summary className="cursor-pointer text-sm text-gray-600 select-none">
+          Markdown 写法示例与模板（点击展开）
+        </summary>
+        <Box sx={{ mt: 1, p: 2, bgcolor: '#fff', border: '1px solid #e6e9f0', borderRadius: 2 }}>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+            最少需要一个 <code>## 题号. [题型]</code> 标题；选项写成 <code>- **A.** 内容</code>，
+            答案行 <code>**答案**：A</code>，解析行 <code>**解析**：…</code> 可选。
+            题号非数字时会按出现顺序自动补号；<code>**来源**：</code> 行会被忽略（来源统一取文件名）。
+          </Typography>
+          <Box
+            component="pre"
+            sx={{
+              m: 0,
+              p: 1.5,
+              bgcolor: '#f7f8fb',
+              borderRadius: 1,
+              fontSize: 12,
+              lineHeight: 1.7,
+              overflowX: 'auto',
+            }}
+          >
+{MD_TEMPLATE}
+          </Box>
+          <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
+            <Button size="small" variant="outlined" onClick={() => downloadMarkdownTemplate()}>
+              下载模板
+            </Button>
+            <Button size="small" variant="text" onClick={() => navigate('/questions/new')}>
+              或者手动录题
+            </Button>
+          </Stack>
+        </Box>
+      </details>
 
       <Paper variant="outlined" sx={{ p: 2, mb: 2, borderRadius: 2 }}>
         <UploadDropzone onFiles={(files) => void handleFiles(files)} disabled={uploading} />

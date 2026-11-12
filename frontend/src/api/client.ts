@@ -222,6 +222,42 @@ export interface QuestionDetailResult {
   anomalies: Anomaly[];
 }
 
+/** 题库（= 来源文档）候选，供手录页的题库名下拉使用（v1.3 新增）。 */
+export interface LibraryItem {
+  id: number;
+  name: string;
+  file_type: string;
+  /** manual / json / md / docx / txt / pdf / other（后端把脏 file_type 归为 other）。 */
+  kind: string;
+  question_count: number;
+  last_updated: string | null;
+}
+
+/** 手录请求体（线上字段为 snake_case）。 */
+export interface CreateQuestionPayload {
+  stem: string;
+  options: Record<string, string>;
+  answer: string;
+  analysis: string;
+  qtype: QType;
+  library_name: string;
+  question_no?: string | null;
+}
+
+/** 手录结果：新建题目 + 该题异常 + 所用题库（created 表示本次新建了题库）。 */
+export interface CreateQuestionResult {
+  question: Question;
+  anomalies: Anomaly[];
+  library: {
+    id: number;
+    name: string;
+    file_type: string;
+    created: boolean;
+    /** 复用已有题库时后端会带回其 batch id。 */
+    import_id?: number;
+  };
+}
+
 // ---------------------------------------------------------------------------
 // API 方法
 // ---------------------------------------------------------------------------
@@ -336,6 +372,16 @@ export const api = {
   /** 导出文件下载地址（浏览器直接跳转，返回文件流）。 */
   exportUrl(format: 'json' | 'md'): string {
     return `${API_BASE}/export?format=${format}`;
+  },
+
+  /** 题库名称候选（手录页下拉数据源，v1.3 新增）。 */
+  listLibraries(): Promise<{ items: LibraryItem[] }> {
+    return request(http.get('/libraries'));
+  },
+
+  /** 手动新增单题（题库不存在则自动新建手录库，v1.3 新增）。 */
+  createQuestion(payload: CreateQuestionPayload): Promise<CreateQuestionResult> {
+    return request(http.post('/questions', payload));
   },
 };
 

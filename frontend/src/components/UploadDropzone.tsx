@@ -1,23 +1,27 @@
 /** 多文件拖拽 / 选择上传区。 */
 import { useRef, useState } from 'react';
 import type { ChangeEvent, DragEvent } from 'react';
-import { Alert, Box, Button, Stack, Typography } from '@mui/material';
+import { Alert, Box, Button, Link, Stack, Typography } from '@mui/material';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
+import {
+  ACCEPT_ATTR,
+  ACCEPT_EXT,
+  MD_TEMPLATE_FILENAME,
+  downloadMarkdownTemplate,
+  fileExt,
+  isSupportedFile,
+  unsupportedExtMessage,
+} from '../constants/import';
 
-const ACCEPT_EXT = ['.docx', '.txt', '.pdf', '.json'];
 const MAX_FILE_SIZE = 20 * 1024 * 1024;
 const MAX_FILES = 20;
+const ACCEPT_LABEL = ACCEPT_EXT.map((ext) => ext.replace('.', '').toUpperCase()).join(' / ');
 
 export interface UploadDropzoneProps {
   onFiles: (files: File[]) => void;
   disabled?: boolean;
   /** 单次最多文件数（默认 20，与后端一致）。 */
   maxFiles?: number;
-}
-
-function isAccepted(file: File): boolean {
-  const lower = file.name.toLowerCase();
-  return ACCEPT_EXT.some((ext) => lower.endsWith(ext));
 }
 
 /** 拖拽上传组件。 */
@@ -36,12 +40,13 @@ export default function UploadDropzone({
       return;
     }
     const files = Array.from(list);
-    const rejectedType = files.filter((file) => !isAccepted(file));
+    const rejectedType = files.filter((file) => !isSupportedFile(file.name));
     const rejectedSize = files.filter((file) => file.size > MAX_FILE_SIZE);
-    const accepted = files.filter((file) => isAccepted(file) && file.size <= MAX_FILE_SIZE);
+    const accepted = files.filter((file) => isSupportedFile(file.name) && file.size <= MAX_FILE_SIZE);
 
     if (rejectedType.length > 0) {
-      setError(`已忽略 ${rejectedType.length} 个不支持的文件（仅接受 DOCX / TXT / PDF / JSON）`);
+      // 逐文件给出与后端一致的文案（v1.3 起不再接受 docx/txt/pdf）
+      setError(rejectedType.map((file) => unsupportedExtMessage(fileExt(file.name) || file.name)).join(' '));
     } else if (rejectedSize.length > 0) {
       setError(`已忽略 ${rejectedSize.length} 个超过 20MB 的文件`);
     }
@@ -98,20 +103,32 @@ export default function UploadDropzone({
       >
         <Stack spacing={1} alignItems="center">
           <CloudUploadIcon color="primary" sx={{ fontSize: 42 }} />
-          <Typography variant="subtitle1">拖拽 DOCX / TXT / PDF / JSON 到此，或点击选择文件</Typography>
+          <Typography variant="subtitle1">拖拽 {ACCEPT_LABEL} 到此，或点击选择文件</Typography>
           <Typography variant="caption" color="text.secondary">
-            支持多文件批量上传（单次最多 {maxFiles} 个，单个不超过 20MB）
+            支持多文件批量上传（单次最多 {maxFiles} 个，单个不超过 20MB）；一个 md 文件 = 一个题库
           </Typography>
           <Button variant="contained" size="small" disabled={disabled} sx={{ mt: 1 }}>
             选择文件
           </Button>
+          <Link
+            component="button"
+            type="button"
+            variant="caption"
+            underline="hover"
+            onClick={(event) => {
+              event.stopPropagation();
+              downloadMarkdownTemplate();
+            }}
+          >
+            下载 Markdown 模板（{MD_TEMPLATE_FILENAME}）
+          </Link>
         </Stack>
       </Box>
       <input
         ref={inputRef}
         type="file"
         multiple
-        accept={ACCEPT_EXT.join(',')}
+        accept={ACCEPT_ATTR}
         hidden
         onChange={handleChange}
       />
