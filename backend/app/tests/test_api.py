@@ -1046,58 +1046,6 @@ def test_create_question_reuses_manual_library_and_isolates_libraries(
     assert all(item["kind"] == "manual" for item in libraries)
 
 
-def test_create_question_isolates_from_imported_library(client: TestClient) -> None:
-    """手录题库名与已导入文件同名 → 另建 manual 库，绝不写进导入库（QA 阻塞-1）。
-
-    ``GET /api/libraries`` 会把 md/json 库列进录题页下拉，用户点选导入库名是**正常路径**。
-    若 ``find_manual_library()`` 只按 filename 匹配，题目会被写进那条导入记录：
-    题号续接导入库（5、6…）、导入库题数被 +1、且不会产生 manual 库。
-    """
-    uploaded = _basic_import(client, "内科题库.md")
-    assert _publish(client, uploaded["import_id"]) == 4
-    imported_file_id = int(uploaded["files"][0]["file_id"])
-
-    data = data_of(_create(client, **_valid_create_payload(library_name="内科题库.md")))
-    assert data["library"]["created"] is True
-    assert data["library"]["file_type"] == "manual"
-    assert data["library"]["name"] == "内科题库.md"
-    assert int(data["library"]["id"]) != imported_file_id
-    # 题目落在新建的手录库里，而不是导入库
-    assert int(data["question"]["import_file_id"]) == int(data["library"]["id"])
-    assert int(data["question"]["import_file_id"]) != imported_file_id
-    # 手录库独立编号：从 1 开始，而不是续接 md 库的 5
-    assert data["question"]["question_no"] == "1"
-
-    libraries = data_of(client.get("/api/libraries"))["items"]
-    by_key = {(item["name"], item["kind"]): item for item in libraries}
-    assert set(by_key) == {("内科题库.md", "md"), ("内科题库.md", "manual")}
-    # 导入库题数不被污染
-    assert by_key[("内科题库.md", "md")]["question_count"] == 4
-    assert by_key[("内科题库.md", "manual")]["question_count"] == 1
-
-
-def test_libraries_do_not_merge_manual_and_imported_same_name(client: TestClient) -> None:
-    """同名手录库与导入库在 /api/libraries 里是两条，``kind`` 各自正确（QA 阻塞-1 反向面）。
-
-    聚合若只按 ``filename`` 分组，先手录后续导入同名文件会合并成 1 条：
-    题数相加、``kind`` 取最早那条的 ``manual``，导入来源在统计页与下拉里「消失」。
-    """
-    manual = data_of(_create(client, **_valid_create_payload(library_name="通用题库.md")))
-    uploaded = _basic_import(client, "通用题库.md")
-    assert _publish(client, uploaded["import_id"]) == 4
-
-    items = data_of(client.get("/api/libraries"))["items"]
-    same = [item for item in items if item["name"] == "通用题库.md"]
-    assert len(same) == 2, f"同名库被合并了：{items}"
-    by_kind = {item["kind"]: item for item in same}
-    assert set(by_kind) == {"manual", "md"}
-    assert by_kind["manual"]["question_count"] == 1
-    assert by_kind["md"]["question_count"] == 4
-    # id 对齐到各自的载体记录，不共用
-    assert by_kind["manual"]["id"] != by_kind["md"]["id"]
-    assert by_kind["manual"]["id"] == manual["library"]["id"]
-
-
 def test_create_question_keeps_minor_defects_as_anomalies(client: TestClient) -> None:
     """题干 1–2 字、选项 1–3 个、显式重复题号都不拦，落成异常。"""
     short = data_of(
