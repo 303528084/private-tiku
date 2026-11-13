@@ -136,6 +136,12 @@ class AnomalyPatchRequest(BaseModel):
     handled: bool = Field(default=True, description="true 标记为已处理")
 
 
+class LoginRequest(BaseModel):
+    """POST /api/auth/login 请求体（v1.4 T01 门禁）。"""
+
+    token: str = Field(default="", description="访问口令（TIKU_ACCESS_TOKEN 的值）")
+
+
 # ---------------------------------------------------------------------------
 # 响应 schema（供 OpenAPI 文档展示；运行期返回 dict）
 # ---------------------------------------------------------------------------

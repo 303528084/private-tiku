@@ -43,11 +43,35 @@ const http = axios.create({
   timeout: 60000,
 });
 
+/** 登录页路径（门禁会话失效时的跳转目标）。 */
+export const LOGIN_PATH = '/login';
+
+/**
+ * 会话失效时跳登录页。
+ *
+ * 刻意**不清理任何全局状态**：只做一次整页跳转，避免「清状态 → 触发请求 →
+ * 又 401 → 又跳转」的循环。已在登录页时直接返回（登录页自身的 401 由页面展示）。
+ */
+function redirectToLogin(): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  if (window.location.pathname === LOGIN_PATH) {
+    return;
+  }
+  window.location.replace(LOGIN_PATH);
+}
+
 http.interceptors.response.use(
   (response) => response,
   (error: AxiosError<ApiEnvelope<unknown>>) => {
     const status = error.response?.status ?? 0;
     const body = error.response?.data;
+    const url = error.config?.url ?? '';
+    // 门禁 401 → 跳登录页；/auth/* 自身的 401（口令错误）交给页面展示，不跳转。
+    if (status === 401 && !url.includes('/auth/')) {
+      redirectToLogin();
+    }
     if (body && typeof body === 'object' && typeof body.code === 'number') {
       throw new ApiError(body.message || '请求失败', body.code, status);
     }
@@ -258,6 +282,20 @@ export interface CreateQuestionResult {
   };
 }
 
+/** 门禁状态（v1.4 T01）：前端启动时据此决定是否跳登录页。 */
+export interface AuthStatus {
+  /** 是否启用了访问门禁（后端 TIKU_ACCESS_TOKEN 非空）。 */
+  enabled: boolean;
+  /** 当前会话是否已通过校验；未启用门禁时恒为 true。 */
+  authenticated: boolean;
+}
+
+/** 登录 / 登出结果。 */
+export interface AuthActionResult {
+  /** 门禁是否启用；false 表示后端未设置口令，无需登录。 */
+  enabled: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // API 方法
 // ---------------------------------------------------------------------------
@@ -382,6 +420,21 @@ export const api = {
   /** 手动新增单题（题库不存在则自动新建手录库，v1.3 新增）。 */
   createQuestion(payload: CreateQuestionPayload): Promise<CreateQuestionResult> {
     return request(http.post('/questions', payload));
+  },
+
+  /** 门禁状态（v1.4 T01）：`/auth/status` 不受门禁拦截，永远可调。 */
+  authStatus(): Promise<AuthStatus> {
+    return request(http.get('/auth/status'));
+  },
+
+  /** 口令登录；成功后浏览器自动持有 HttpOnly 会话 Cookie。 */
+  authLogin(token: string): Promise<AuthActionResult> {
+    return request(http.post('/auth/login', { token }));
+  },
+
+  /** 退出登录（清除会话 Cookie）。 */
+  authLogout(): Promise<AuthActionResult> {
+    return request(http.post('/auth/logout'));
   },
 };
 

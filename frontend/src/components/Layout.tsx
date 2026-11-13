@@ -1,7 +1,7 @@
 /** 整体布局：响应式侧边导航 + 顶部栏（面包屑/标语）+ 限宽内容区。 */
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Link as RouterLink, useLocation } from 'react-router-dom';
+import { Link as RouterLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   AppBar,
   Box,
@@ -24,6 +24,7 @@ import ReportProblemIcon from '@mui/icons-material/ReportProblem';
 import BarChartIcon from '@mui/icons-material/BarChart';
 import AddCircleOutlineIcon from '@mui/icons-material/AddCircleOutline';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
+import LogoutIcon from '@mui/icons-material/Logout';
 import { api, toErrorMessage } from '../api/client';
 import type { StatsResult } from '../api/client';
 
@@ -82,14 +83,48 @@ export default function Layout({ children }: LayoutProps): JSX.Element {
   // md 断点（默认 900px）以下视为窄屏：侧栏改用临时抽屉 + 汉堡菜单。
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
   const location = useLocation();
+  const navigate = useNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [stats, setStats] = useState<StatsResult | null>(null);
   const [statsError, setStatsError] = useState('');
+  /** 门禁是否启用（v1.4 T01）；未启用时不显示「退出登录」。 */
+  const [authEnabled, setAuthEnabled] = useState(false);
 
   // 路由切换后自动收起临时抽屉（桌面 permanent 抽屉始终展开，不受影响）。
   useEffect(() => {
     setMobileOpen(false);
   }, [location.pathname]);
+
+  // 门禁状态只问一次：决定顶栏是否显示「退出登录」。
+  useEffect(() => {
+    let active = true;
+    api
+      .authStatus()
+      .then((status) => {
+        if (active) {
+          setAuthEnabled(status.enabled);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setAuthEnabled(false);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const handleLogout = (): void => {
+    api
+      .authLogout()
+      .catch(() => {
+        // 会话本就失效时后端会 401，忽略即可，统一跳登录页
+      })
+      .finally(() => {
+        navigate('/login', { replace: true });
+      });
+  };
 
   useEffect(() => {
     let active = true;
@@ -202,6 +237,18 @@ export default function Layout({ children }: LayoutProps): JSX.Element {
           >
             JSON / Markdown 导入 · 手动录题 · 全文检索 · 异常校对
           </Typography>
+          {authEnabled ? (
+            <IconButton
+              size="small"
+              color="inherit"
+              aria-label="退出登录"
+              title="退出登录"
+              onClick={handleLogout}
+              sx={{ ml: 0.5 }}
+            >
+              <LogoutIcon fontSize="small" />
+            </IconButton>
+          ) : null}
         </Toolbar>
       </AppBar>
       <Drawer

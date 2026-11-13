@@ -24,11 +24,12 @@ from ..models import (
     ok,
 )
 
-from . import anomalies, export, imports, libraries, questions, search
+from . import anomalies, auth, export, imports, libraries, questions, search
 
 logger = logging.getLogger("private_tiku.api")
 
 router = APIRouter()
+router.include_router(auth.router)
 router.include_router(imports.router)
 router.include_router(questions.router)
 router.include_router(search.router)
