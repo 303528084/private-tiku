@@ -34,6 +34,48 @@ function toFormValue(detail: QuestionDetailResult): QuestionFormValue {
   };
 }
 
+/**
+ * 两个表单值是否等价（用于判断「有没有未保存的改动」）。
+ *
+ * 口径与提交 payload 对齐：文本字段按原样比较，选项统一走 ``filledOptions``
+ * （trim + 丢弃空行 + 键大写排序），因此「加了一行空选项」不会被误判成脏数据。
+ */
+function isSameFormValue(left: QuestionFormValue, right: QuestionFormValue): boolean {
+  if (left.qtype !== right.qtype) {
+    return false;
+  }
+  if (left.stem !== right.stem || left.answer !== right.answer || left.analysis !== right.analysis) {
+    return false;
+  }
+  const leftOptions = filledOptions(left.options);
+  const rightOptions = filledOptions(right.options);
+  const leftKeys = Object.keys(leftOptions);
+  const rightKeys = Object.keys(rightOptions);
+  if (leftKeys.length !== rightKeys.length) {
+    return false;
+  }
+  for (const key of leftKeys) {
+    if (leftOptions[key] !== rightOptions[key]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * 判断浏览器历史里是否存在可回退的上一页。
+ *
+ * react-router v6 会在 ``history.state`` 写入 ``idx``：直接通过 URL 打开页面时 ``idx === 0``，
+ * 此时 ``navigate(-1)`` 会把用户弹出应用（或毫无反应），需要降级到首页。
+ */
+function canGoBack(): boolean {
+  if (window.history.length <= 1) {
+    return false;
+  }
+  const state: { idx?: number } | null = window.history.state as { idx?: number } | null;
+  return (state?.idx ?? 0) > 0;
+}
+
 /** 题目详情页。 */
 export default function QuestionDetailPage(): JSX.Element {
   const { id } = useParams<{ id: string }>();
@@ -124,6 +166,24 @@ export default function QuestionDetailPage(): JSX.Element {
     }
   };
 
+  /**
+   * 放弃修改：有未保存改动时先确认，然后返回上一页（无历史则回首页）。
+   *
+   * 与页面左上角返回箭头保持一致的「返回上一页」体验；只是多了一层防误触确认，
+   * 避免用户辛苦改了一半的题目被一键丢掉。
+   */
+  const discardAndBack = useCallback((): void => {
+    const dirty = detail !== null && value !== null && !isSameFormValue(value, toFormValue(detail));
+    if (dirty && !window.confirm('放弃未保存的修改并返回？')) {
+      return;
+    }
+    if (canGoBack()) {
+      navigate(-1);
+      return;
+    }
+    navigate('/');
+  }, [detail, value, navigate]);
+
   if (loading) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
@@ -182,7 +242,7 @@ export default function QuestionDetailPage(): JSX.Element {
             <Button variant="contained" onClick={() => void save()} disabled={saving || !valid}>
               保存并重算异常
             </Button>
-            <Button variant="outlined" onClick={() => void load()} disabled={saving}>
+            <Button variant="outlined" onClick={discardAndBack} disabled={saving}>
               放弃修改
             </Button>
             <Box sx={{ flexGrow: 1 }} />
