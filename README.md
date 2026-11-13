@@ -124,10 +124,15 @@ frontend/
 | GET | `/api/anomalies?type=&handled=&page=&size=` | 异常清单（含题目快照） |
 | PATCH | `/api/anomalies/{id}` | 标记已处理 `{"handled": true}` |
 | GET | `/api/export?format=json\|md` | 导出文件流 |
+| GET | `/api/export/share-pack?type=&only_anomaly=&doc_id=` | 导出**分享包**（`.zip`：`manifest.json` + `bank.md` + `media/`，筛选语义同 `/api/search`） |
+| POST | `/api/imports/share-pack` | 导入**分享包**（multipart 字段名 `file`，`.zip`）→ 解压校验 → 查重 → 备份 → 直接入库（`published`） |
 | GET | `/api/stats` | 统计面板 |
+| POST | `/api/auth/login` | 门禁登录 `{"token": "..."}`（`TIKU_ACCESS_TOKEN` 为空时直接返回 `enabled: false`） |
+| POST | `/api/auth/logout` | 退出登录（清除会话 Cookie） |
+| GET | `/api/auth/status` | `{enabled, authenticated}`（前端据此决定是否跳登录页） |
 
-**错误码**：`0` 成功 · `40001` 参数错误 · `40401` 资源不存在 · `42201` 文件类型不支持 · `50001` 解析失败 · `50000` 内部错误。
-HTTP 状态码同步（400/404/422/500），响应 body 仍是统一结构。
+**错误码**：`0` 成功 · `40001` 参数错误 · `40100` 未登录或会话失效 · `40101` 访问令牌错误 · `40401` 资源不存在 · `42201` 文件类型不支持 · `50001` 解析失败 · `50000` 内部错误。
+HTTP 状态码同步（400/401/404/422/500），响应 body 仍是统一结构（门禁的 401 也返回 `{code, message, data}`，不是 FastAPI 默认的 `{"detail": ...}`）。
 
 枚举：题型 `single|multiple|judge|unknown`；异常 `missing_answer|missing_options|too_few_options|empty_stem|duplicate_number|parse_error`；题目状态 `pending|published`；导入状态 `parsing|pending_confirm|committed|failed`。
 
@@ -231,7 +236,10 @@ Markdown 往返一致性由 `tests/test_markdown.py::test_markdown_roundtrip_is_
 ## 7. 已知限制
 
 1. **搜索短词**：FTS5 trigram 要求 ≥3 字符，`房颤`（2 字）等短词自动退化为 `LIKE`，万级数据仍 <100ms。
-2. **单管理员模式**：无登录 / 权限体系，请勿直接暴露公网；需要时应前置反向代理鉴权。
+2. **单管理员模式**：只有「一个访问令牌」这一层门禁（环境变量 `TIKU_ACCESS_TOKEN`），没有用户 / 角色 / 权限体系；
+   令牌留空即关闭门禁（默认），请勿在未设令牌的情况下直接暴露公网，需要多账号时应前置反向代理鉴权。
+   门禁是**无状态会话 Cookie**：`tiku_session = HMAC-SHA256(TIKU_ACCESS_TOKEN, "private-tiku-session")`，
+   服务端不保存会话，因此**无法单独「踢下线」某个浏览器**；轮换令牌即令所有已登录浏览器同时失效（需重新登录）。
 3. **题库规模**：按万级题量设计；十万级需迁移独立检索引擎（接口已隔离在 `api/search.py`）。
 4. **删除题目**：删除后 FTS 索引由触发器同步清理，但 SQLite 文件不会立即收缩（可用 `VACUUM` 手动整理）。
 5. **JSON 题库的题号可能被重排**：源文件按题型分段编号（各自从 1 开始）时，为保证「题号」
@@ -251,6 +259,11 @@ Markdown 往返一致性由 `tests/test_markdown.py::test_markdown_roundtrip_is_
     （`：`、`？`、`！`、`，` 等）统一为半角，所以手录内容或外部 md 若含全角标点，**第一次**导出再导入
     的 diff 会出现在这些标点上；入库之后再往返即稳定逐字节相等（v1.2 起的既有行为，非本期引入）。
     若需要严格逐字节往返，请在录入时直接使用半角标点。
+12. **分享包导入「只增不覆盖」**：`POST /api/imports/share-pack` 按内容指纹查重
+    （`题干 + 排序后的选项 + 答案 + 题型`，经 `normalize_text()` 规范化），重复题不入库、只计入
+    `duplicates`；指纹**不含解析**，所以「只改了讲解文字」的同一道题会被判为重复而跳过。
+    导入的题目直接是 `published`（不需要再确认入库），因此每次真正写库前都会先备份到
+    `data/backups/pre-import-*.db`，备份失败则整体中止、库内数据不变。
 
 ---
 

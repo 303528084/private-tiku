@@ -13,6 +13,8 @@ services:
     environment:
       TIKU_PORT: "8000"
       TIKU_DATA_DIR: /app/data
+      # 访问门禁（v1.4 T01）：取自宿主机 .env；留空 = 关闭门禁（与 v1.3 行为一致）
+      TIKU_ACCESS_TOKEN: "${TIKU_ACCESS_TOKEN:-}"
     volumes:
       # SQLite 数据库与上传原始文件持久化
       - ./data:/app/data
