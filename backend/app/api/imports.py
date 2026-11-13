@@ -1,20 +1,26 @@
-"""导入相关 API：上传解析 / 列表 / 详情 / 确认入库 / 删除。
+"""导入相关 API：上传解析 / 分享包导入 / 列表 / 详情 / 确认入库 / 删除。
 
 流程（架构 §4）：multipart 多文件上传 → 落盘 → 同步解析 → 暂存（status=pending）
 → 用户确认 commit 后转为 published。
+
+v1.4 新增 ``POST /api/imports/share-pack``：分享包（ZIP）走「解压 → 校验 →
+查重 → 备份 → 直接 published」的另一条链路，**不需要**再确认入库。
 """
 
 from __future__ import annotations
 
+import logging
 import shutil
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from fastapi import APIRouter, File, Query, Request, UploadFile
 
-from .. import config, db
+from .. import backup, config, db
 from ..models import (
+    CODE_INTERNAL_ERROR,
     CODE_NOT_FOUND,
     CODE_PARAM_ERROR,
     CODE_PARSE_FAILED,
@@ -26,11 +32,19 @@ from ..models import (
     ok,
 )
 from ..parser import pipeline
+from ..parser.extractor import Parsed
 from ..parser.reader import ReaderError
+from ..share import dedup
+from ..share.unpack import SharePackError, cleanup, extract_share_pack
+
+logger = logging.getLogger("private_tiku.api.imports")
 
 router = APIRouter(prefix="/imports", tags=["imports"])
 
 FORM_FIELD_NAMES = ("files[]", "files")
+SHARE_FIELD_NAMES = ("file", "files[]", "files")
+"""分享包上传接受的表单字段名（``file`` 优先，兼容 ``files[]``）。"""
+
 
 
 # ---------------------------------------------------------------------------
@@ -71,8 +85,24 @@ def _ensure_import(conn: Any, import_id: int) -> Dict[str, Any]:
     return db.import_to_dict(row)
 
 
-def _insert_parsed_items(conn: Any, file_id: int, items: Sequence[pipeline.ParsedItem]) -> int:
-    """把解析结果写入 questions / anomalies（status=pending）。"""
+def _insert_parsed_items(
+    conn: Any,
+    file_id: int,
+    items: Sequence[pipeline.ParsedItem],
+    status: str = QuestionStatus.pending.value,
+) -> int:
+    """把解析结果写入 questions / anomalies。
+
+    Args:
+        conn: 数据库连接（调用方负责事务）。
+        file_id: ``import_files.id``。
+        items: 解析结果。
+        status: 写入的题目状态。普通导入为 ``pending``（需人工确认）；
+            分享包导入为 ``published``（包内是已校对内容，见 T03）。
+
+    Returns:
+        写入的异常条数。
+    """
     anomaly_total = 0
     for item in items:
         parsed = item.parsed
@@ -90,7 +120,7 @@ def _insert_parsed_items(conn: Any, file_id: int, items: Sequence[pipeline.Parse
                 db.dump_options(parsed.options),
                 parsed.answer,
                 parsed.analysis,
-                QuestionStatus.pending.value,
+                status,
             ),
         )
         question_id = int(cursor.lastrowid)
@@ -279,6 +309,207 @@ async def create_import(
         )
 
     return ok({"import_id": import_id, "files": file_payloads})
+
+
+# ---------------------------------------------------------------------------
+# POST /api/imports/share-pack（v1.4 T03）
+# ---------------------------------------------------------------------------
+def _is_empty_question(parsed: Parsed) -> bool:
+    """题干 / 选项 / 答案全空的「空题」不入库（第三方分享包可能出现空块）。"""
+    return not (parsed.stem or parsed.options or parsed.answer)
+
+
+async def _collect_share_upload(
+    request: Request, declared: Optional[UploadFile]
+) -> Any:
+    """取分享包上传对象：优先声明参数，缺省时回退解析 multipart form。"""
+    if declared is not None and _is_upload(declared):
+        return declared
+    try:
+        form = await request.form()
+    except Exception as exc:  # pragma: no cover - 非法 multipart
+        raise ApiError(f"表单解析失败：{exc}", CODE_PARAM_ERROR, 400) from exc
+    for key, value in form.multi_items():
+        if key in SHARE_FIELD_NAMES and _is_upload(value):
+            return value
+    raise ApiError(
+        "未接收到分享包文件，表单字段名应为 file（.zip）", CODE_PARAM_ERROR, 400
+    )
+
+
+@router.post("/share-pack")
+async def import_share_pack(
+    request: Request,
+    file: Optional[UploadFile] = File(default=None, description="分享包 .zip"),
+) -> Dict[str, Any]:
+    """导入分享包：解压 → 校验 → 查重 → **备份** → 写入（published）。
+
+    执行顺序（不可调换）：
+
+    1. 解压到 ``DATA_DIR/share_staging/<uuid>``（安全规则见
+       :mod:`app.share.unpack`；被拒绝的包不会留下任何文件）；
+    2. 解析 ``bank.md`` → 计算内容指纹 → 与库内**全部**题目比对；
+    3. **备份主库**（``backups/pre-import-*.db`` + ``integrity_check``）；
+       备份失败直接中止，库内数据不变；
+    4. 单事务写入 ``imports`` / ``import_files`` / ``questions``（``published``）。
+
+    语义：**新增、不覆盖**。重复题（指纹相同）不写入，只计入 ``duplicates``；
+    同 ``question_no`` 但内容不同 → 视为不同题，两条都保留。
+
+    Returns:
+        ``{import_id, file_id, added, duplicates, skipped, total_in_pack, backup_path}``；
+        全部重复时 ``import_id`` / ``file_id`` / ``backup_path`` 为 ``None``（不写库也不备份）。
+
+    Raises:
+        ApiError: 文件缺失/非 zip/超限（40001）、包不合法（40001）、备份失败（50000）。
+    """
+    upload = await _collect_share_upload(request, file)
+    filename = (getattr(upload, "filename", "") or "share-pack.zip").strip()
+    if Path(filename).suffix.lower() != ".zip":
+        raise ApiError("分享包必须是 .zip 文件", CODE_PARAM_ERROR, 400)
+
+    try:
+        data = await upload.read()
+    except Exception as exc:  # pragma: no cover - 上传中断
+        raise ApiError(f"读取上传内容失败：{exc}", CODE_PARAM_ERROR, 400) from exc
+    if not data:
+        raise ApiError("文件内容为空", CODE_PARAM_ERROR, 400)
+    if len(data) > config.MAX_FILE_SIZE:
+        raise ApiError(
+            f"分享包超过大小上限 {config.MAX_FILE_SIZE // (1024 * 1024)}MB",
+            CODE_PARAM_ERROR,
+            400,
+        )
+
+    config.ensure_dirs()
+    staging = config.DATA_DIR / config.SHARE_STAGING_DIRNAME / uuid.uuid4().hex
+    try:
+        try:
+            extracted = extract_share_pack(data, staging)
+        except SharePackError as exc:
+            logger.warning("分享包被拒绝：%s", exc)
+            raise ApiError(str(exc), CODE_PARAM_ERROR, 400) from exc
+
+        manifest: Dict[str, Any] = extracted["manifest"]
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        bank_name = str(manifest.get("bank_name") or "").strip() or f"分享包-{stamp}"
+
+        try:
+            parts = pipeline.run_parts(extracted["bank_path"], display_name=bank_name)
+        except ReaderError as exc:
+            raise ApiError(f"分享包题库正文解析失败：{exc}", CODE_PARAM_ERROR, 400) from exc
+        items = [item for part in parts for item in part.items]
+        total_in_pack = len(items)
+        if total_in_pack == 0:
+            raise ApiError("分享包内没有可导入的题目", CODE_PARAM_ERROR, 400)
+
+        # ---- 查重（v1.4 不加列：对存量题现场算指纹）----
+        with db.get_conn() as conn:
+            known = dedup.existing_hashes(conn)
+
+        selected: List[pipeline.ParsedItem] = []
+        duplicates = 0
+        skipped = 0
+        seen = set(known)
+        for item in items:
+            if _is_empty_question(item.parsed):
+                skipped += 1
+                continue
+            digest = dedup.content_hash(item.parsed)
+            if digest in seen:
+                duplicates += 1
+                continue
+            seen.add(digest)
+            selected.append(item)
+
+        if not selected:
+            logger.info(
+                "分享包无新增题目：total=%d duplicates=%d skipped=%d",
+                total_in_pack,
+                duplicates,
+                skipped,
+            )
+            return ok(
+                {
+                    "import_id": None,
+                    "file_id": None,
+                    "added": 0,
+                    "duplicates": duplicates,
+                    "skipped": skipped,
+                    "total_in_pack": total_in_pack,
+                    "backup_path": None,
+                },
+                "没有新增题目（全部为重复题）",
+            )
+
+        # ---- 备份必须在写库之前 ----
+        try:
+            backup_path = backup.backup_database(
+                backup.backup_dir() / f"pre-import-{stamp}.db"
+            )
+        except backup.BackupError as exc:
+            logger.error("导入前备份失败，已中止导入：%s", exc)
+            raise ApiError(
+                f"导入前备份失败，已中止导入（库内数据未改变）：{exc}",
+                CODE_INTERNAL_ERROR,
+                500,
+            ) from exc
+
+        # ---- 单事务写入 ----
+        with db.get_conn() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO imports (status, total_files, ok_files, failed_files,
+                                     total_questions, committed_questions)
+                VALUES (?, 1, 1, 0, ?, ?)
+                """,
+                (ImportStatus.committed.value, len(selected), len(selected)),
+            )
+            import_id = int(cursor.lastrowid)
+            cursor = conn.execute(
+                """
+                INSERT INTO import_files (import_id, filename, file_type, status, error,
+                                          total_questions)
+                VALUES (?, ?, ?, ?, '', ?)
+                """,
+                (
+                    import_id,
+                    bank_name,
+                    config.SHARE_FILE_TYPE,
+                    FileStatus.parsed.value,
+                    len(selected),
+                ),
+            )
+            file_id = int(cursor.lastrowid)
+            anomaly_count = _insert_parsed_items(
+                conn, file_id, selected, status=QuestionStatus.published.value
+            )
+            conn.execute(
+                "UPDATE import_files SET anomaly_count = ? WHERE id = ?",
+                (anomaly_count, file_id),
+            )
+
+        logger.info(
+            "分享包导入完成：import_id=%s added=%d duplicates=%d skipped=%d 备份=%s",
+            import_id,
+            len(selected),
+            duplicates,
+            skipped,
+            backup_path,
+        )
+        return ok(
+            {
+                "import_id": import_id,
+                "file_id": file_id,
+                "added": len(selected),
+                "duplicates": duplicates,
+                "skipped": skipped,
+                "total_in_pack": total_in_pack,
+                "backup_path": str(backup_path),
+            }
+        )
+    finally:
+        cleanup(staging)
 
 
 # ---------------------------------------------------------------------------
