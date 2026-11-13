@@ -1,0 +1,10 @@
+# 统一行尾，避免 Windows/Linux 协作时整文件 diff
+* text=auto
+
+# 二进制资源（fixtures 里的 docx/pdf 不能被当文本处理）
+*.docx binary
+*.pdf  binary
+*.db   binary
+*.png  binary
+*.jpg  binary
+*.ico  binary

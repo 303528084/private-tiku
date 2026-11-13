@@ -1,0 +1,223 @@
+# private-tiku · 构建 Docker 镜像并发布到 Docker Hub
+#
+# 设计要点（改动前请先读）：
+#   1. 本文件位于**仓库根**的 .github/workflows/ 下（GitHub 只读根目录）。
+#      仓库根即项目根，因此构建上下文写成 .，
+#      Dockerfile 写成 ./backend/Dockerfile。
+#      这与 docker-compose.yml 的 context: . + dockerfile: backend/Dockerfile 完全一致。
+#   2. 镜像名不硬编码账号，统一取 secrets.DOCKERHUB_USERNAME（Docker Hub 账号名与 GitHub 账号未必一致）。
+#   3. 质量关卡：先 build 到本地 daemon（load: true）→ 真起容器轮询 /api/health → 通过后才 push。
+#      这样 latest 永远不会被一个跑不起来的镜像覆盖。
+#   4. load: true 依赖 --output=type=docker，因此必须 provenance: false，
+#      否则 buildx 会以「导出 manifest list」为由直接报错。
+
+name: Docker Publish
+
+on:
+  push:
+    branches:
+      - main
+    # 台账/文档类改动不触发全量构建；但 workflow 自身变更要验证
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - 'docker-compose.yml'
+      - '.github/workflows/docker-publish.yml'
+    # 注意：GitHub 对 tag push 不评估 paths 过滤器，v* 标签总是会触发构建
+    tags:
+      - 'v*'
+  # 手动触发：可额外指定一个镜像标签（如 1.2.3-rc1），留空则只用默认标签
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '额外镜像标签（可选，例如 1.2.3-rc1）'
+        required: false
+        default: ''
+        type: string
+
+# 推 Docker Hub 不需要写 GitHub Packages，只需读代码
+permissions:
+  contents: read
+
+# 同一 branch/tag 的连续推送只保留最新一次，避免构建排队堆积
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # 镜像名全部由 Secret 推导，仓库里不出现任何账号名
+  # 注意：用户名来自 Secret，GitHub 会在日志里把它打码成 ***（仅影响显示，不影响命令执行）
+  IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/private-tiku
+  CONTAINER_NAME: private-tiku-ci-verify
+
+jobs:
+  build-verify-push:
+    name: Build → Verify → Push
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # 元数据只依赖 github.ref / github.sha，浅克隆足够
+          fetch-depth: 1
+
+      # 早失败：缺 Secret 时给出可读的报错，而不是让 login 抛 401
+      - name: Verify required secrets
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          missing=0
+          if [ -z "${DOCKERHUB_USERNAME}" ]; then
+            echo "::error::缺少仓库 Secret DOCKERHUB_USERNAME（Docker Hub 用户名）"
+            missing=1
+          fi
+          if [ -z "${DOCKERHUB_TOKEN}" ]; then
+            echo "::error::缺少仓库 Secret DOCKERHUB_TOKEN（Docker Hub Read & Write Access Token）"
+            missing=1
+          fi
+          if [ "${missing}" -ne 0 ]; then
+            echo "配置方式见 README.md「CI / Docker Hub 自动发布」一节。"
+            exit 1
+          fi
+          echo "仓库 Secret 已就绪（值不回显）。"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Extract image metadata (tags / labels)
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            # latest 只给默认分支（main），tag 推送不会覆盖它
+            type=raw,value=latest,enable={{is_default_branch}}
+            # 提交短 SHA，任何触发方式都有，便于回溯
+            type=sha,format=short
+            # v1.2.3 → 1.2.3
+            type=semver,pattern={{version}}
+            # v1.2.3 → 1.2（滚动小版本）
+            type=semver,pattern={{major}}.{{minor}}
+            # 非 semver 的 tag（如 v2024-10-release）原样保留
+            type=ref,event=tag
+            # 手动触发时追加的自定义标签（enable 里先判事件类型，避免 inputs 为空时 value 也空）
+            type=raw,value=${{ inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' && inputs.tag != '' }}
+          labels: |
+            org.opencontainers.image.title=private-tiku
+            org.opencontainers.image.description=私有护理题库系统（FastAPI + SQLite FTS5 + React）
+            org.opencontainers.image.licenses=UNLICENSED
+
+      # 第一遍构建：只落到本地 daemon，不推远端
+      - name: Build image (load into local daemon, no push)
+        uses: docker/build-push-action@v7
+        with:
+          # 上下文 = 仓库根（Dockerfile 里的 COPY frontend/... 相对此目录）
+          context: .
+          file: ./backend/Dockerfile
+          # 只构建 amd64：GitHub 托管 runner 原生架构，无需 QEMU。
+          # 如确需 arm64（树莓派/Apple Silicon 服务器），改成
+          # platforms: linux/amd64,linux/arm64 并加 docker/setup-qemu-action@v4，
+          # 代价是构建时间约翻倍、镜像约翻倍，且 load: true 不再可用（需改为直接 push）。
+          platforms: linux/amd64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          load: true
+          push: false
+          provenance: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # 质量关卡：镜像必须真能跑起来并返回健康
+      - name: Smoke-test image (/api/health + 前端产物)
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          image="$(printf '%s\n' "${TAGS}" | head -n1)"
+          echo "验证镜像: ${image}"
+          docker image inspect "${image}" --format 'ID={{.Id}}  Arch={{.Architecture}}  Cmd={{.Config.Cmd}}'
+
+          docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+          docker run -d --name "${CONTAINER_NAME}" -p 8000:8000 "${image}" >/dev/null
+
+          ok=0
+          for i in $(seq 1 30); do
+            # 共 30 轮，每轮 sleep 2s + curl --max-time 3s
+            # → 最长约 60–150s（最坏情况 30 × (2+3) = 150s；实测失败路径约 2 分钟）
+            if body="$(curl -fsS --max-time 3 http://127.0.0.1:8000/api/health 2>/dev/null)"; then
+              if printf '%s' "${body}" | tr -d ' \n' | grep -q '"status":"ok"'; then
+                echo "健康检查通过（第 ${i} 次尝试）: ${body}"
+                ok=1
+                break
+              fi
+            fi
+            sleep 2
+          done
+
+          if [ "${ok}" -ne 1 ]; then
+            echo "::error::容器在约 150s 内未通过 GET /api/health（要求响应体含 \"status\":\"ok\"）"
+            docker ps -a --filter "name=${CONTAINER_NAME}" || true
+            docker logs "${CONTAINER_NAME}" || true
+            exit 1
+          fi
+
+          # 额外断言：多阶段构建的前端产物确实落进了镜像（否则 main.py 会走 JSON 兜底）
+          root_html="$(curl -fsS --max-time 5 http://127.0.0.1:8000/ || true)"
+          if ! printf '%s' "${root_html}" | grep -q 'id="root"'; then
+            echo "::error::GET / 未返回前端 index.html，多阶段前端产物可能缺失"
+            printf '%s\n' "${root_html}" | head -c 400 || true
+            docker logs "${CONTAINER_NAME}" || true
+            exit 1
+          fi
+          echo "前端静态产物检查通过（/ 返回 index.html）。"
+
+      # 只在镜像被证明可运行之后才登录，避免凭据在失败构建中被使用
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # 第二遍构建：同一份输入，命中的是上一步写进 gha 的缓存，不会重复编译
+      - name: Push image
+        id: push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./backend/Dockerfile
+          platforms: linux/amd64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          push: true
+          provenance: false
+          cache-from: type=gha
+
+      - name: Write job summary
+        if: always()
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          {
+            echo "### Docker 镜像发布"
+            echo ""
+            echo "- 镜像: \`${{ env.IMAGE_NAME }}\`"
+            echo "- 标签:"
+            if [ -n "${TAGS}" ]; then
+              # 用 while+printf 而不是 sed：sed 的 s/$/`/ 会让 shellcheck 误报 SC2016
+              while IFS= read -r tag; do
+                printf "  - \`%s\`\n" "${tag}"
+              done <<< "${TAGS}"
+            else
+              echo "  - （无标签信息：前置步骤未产出）"
+            fi
+            echo "- digest: \`${DIGEST:-未推送}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Clean up verification container
+        if: always()
+        run: docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true

@@ -19,63 +19,62 @@
 
 ## 2. 文件树
 ```
-private-tiku/
-├── docker-compose.yml      # 单服务编排，挂载 ./data，暴露端口
-├── .env.example            # 环境变量样例（端口/数据目录）
-├── README.md               # 部署与使用说明
-├── .gitignore              # 忽略 node_modules/dist/data/__pycache__
-├── backend/
-│   ├── Dockerfile          # 多阶段：node:20 构建前端 → python:3.11-slim 运行
-│   ├── requirements.txt    # 后端依赖（见 §8）
-│   └── app/
-│       ├── __init__.py
-│       ├── main.py         # FastAPI 实例、路由注册、StaticFiles 托管 frontend/dist
-│       ├── config.py       # 路径/端口/常量（DATA_DIR、DB_PATH、ALLOWED_EXT）
-│       ├── db.py           # sqlite3 连接工厂、建表 DDL、FTS 降级检测、初始化
-│       ├── models.py       # Pydantic 请求/响应 schema + 枚举常量
-│       ├── api/
-│       │   ├── __init__.py # APIRouter 聚合
-│       │   ├── imports.py  # 上传解析/列表/详情/确认入库/删除
-│       │   ├── questions.py# 题目详情/编辑/删除
-│       │   ├── search.py   # 全文搜索 + 筛选 + 高亮
-│       │   ├── anomalies.py# 异常列表 / 标记已处理
-│       │   └── export.py   # JSON/Markdown 导出
-│       ├── parser/
-│       │   ├── __init__.py
-│       │   ├── reader.py   # DOCX/TXT/PDF → 原始文本行（带行号/页码）
-│       │   ├── normalize.py# 全半角统一、去空白空行、统一标点
-│       │   ├── splitter.py # 按题号正则切分题目块
-│       │   ├── extractor.py# 题干/选项/答案/解析/题型抽取
-│       │   ├── validator.py# 6 类异常规则判定
-│       │   └── pipeline.py # 编排 reader→normalize→splitter→extractor→validator
-│       └── tests/
-│           ├── test_parser.py  # 解析/异常规则单测
-│           ├── test_api.py     # API 集成测试（TestClient）
-│           └── fixtures/       # 样例 docx/txt/pdf
-├── frontend/
-│   ├── package.json        # 前端依赖与脚本
-│   ├── vite.config.ts      # 构建配置，base '/'，dev 代理 /api
-│   ├── tailwind.config.js  # Tailwind 扫描 src
-│   ├── postcss.config.js   # postcss 插件
-│   ├── index.html          # SPA 入口
-│   ├── tsconfig.json       # TS 配置
-│   └── src/
-│       ├── main.tsx        # React 挂载 + ThemeProvider + Router
-│       ├── App.tsx         # 路由表与整体布局
-│       ├── api/client.ts   # axios 封装，baseURL /api，统一解包与报错
-│       ├── pages/
-│       │   ├── SearchPage.tsx  # 首页：搜索框/筛选/结果高亮
-│       │   ├── ImportPage.tsx  # 拖拽上传/导入列表/预览确认入库
-│       │   ├── AnomalyPage.tsx # 异常列表/筛选/标记已处理
-│       │   ├── QuestionDetailPage.tsx # 题目详情与编辑
-│       │   └── StatsPage.tsx   # 题库总量/异常数/导入统计
-│       └── components/
-│           ├── Layout.tsx      # 侧边导航 + 内容区
-│           ├── QuestionCard.tsx# 搜索结果卡片（题型/题干/选项/答案/异常标签）
-│           ├── Highlight.tsx   # 安全渲染 <mark> 高亮片段
-│           ├── UploadDropzone.tsx # 多文件拖拽/选择上传
-│           ├── FilterBar.tsx   # 题型/仅异常/文档筛选
-│           └── StatusChip.tsx  # 状态/异常类型彩色徽标
+docker-compose.yml      # 单服务编排，挂载 ./data，暴露端口
+.env.example            # 环境变量样例（端口/数据目录）
+README.md               # 部署与使用说明
+.gitignore              # 忽略 node_modules/dist/data/__pycache__
+backend/
+├── Dockerfile          # 多阶段：node:20 构建前端 → python:3.11-slim 运行
+├── requirements.txt    # 后端依赖（见 §8）
+└── app/
+    ├── __init__.py
+    ├── main.py         # FastAPI 实例、路由注册、StaticFiles 托管 frontend/dist
+    ├── config.py       # 路径/端口/常量（DATA_DIR、DB_PATH、ALLOWED_EXT）
+    ├── db.py           # sqlite3 连接工厂、建表 DDL、FTS 降级检测、初始化
+    ├── models.py       # Pydantic 请求/响应 schema + 枚举常量
+    ├── api/
+    │   ├── __init__.py # APIRouter 聚合
+    │   ├── imports.py  # 上传解析/列表/详情/确认入库/删除
+    │   ├── questions.py# 题目详情/编辑/删除
+    │   ├── search.py   # 全文搜索 + 筛选 + 高亮
+    │   ├── anomalies.py# 异常列表 / 标记已处理
+    │   └── export.py   # JSON/Markdown 导出
+    ├── parser/
+    │   ├── __init__.py
+    │   ├── reader.py   # DOCX/TXT/PDF → 原始文本行（带行号/页码）
+    │   ├── normalize.py# 全半角统一、去空白空行、统一标点
+    │   ├── splitter.py # 按题号正则切分题目块
+    │   ├── extractor.py# 题干/选项/答案/解析/题型抽取
+    │   ├── validator.py# 6 类异常规则判定
+    │   └── pipeline.py # 编排 reader→normalize→splitter→extractor→validator
+    └── tests/
+        ├── test_parser.py  # 解析/异常规则单测
+        ├── test_api.py     # API 集成测试（TestClient）
+        └── fixtures/       # 样例 docx/txt/pdf
+frontend/
+├── package.json        # 前端依赖与脚本
+├── vite.config.ts      # 构建配置，base '/'，dev 代理 /api
+├── tailwind.config.js  # Tailwind 扫描 src
+├── postcss.config.js   # postcss 插件
+├── index.html          # SPA 入口
+├── tsconfig.json       # TS 配置
+└── src/
+    ├── main.tsx        # React 挂载 + ThemeProvider + Router
+    ├── App.tsx         # 路由表与整体布局
+    ├── api/client.ts   # axios 封装，baseURL /api，统一解包与报错
+    ├── pages/
+    │   ├── SearchPage.tsx  # 首页：搜索框/筛选/结果高亮
+    │   ├── ImportPage.tsx  # 拖拽上传/导入列表/预览确认入库
+    │   ├── AnomalyPage.tsx # 异常列表/筛选/标记已处理
+    │   ├── QuestionDetailPage.tsx # 题目详情与编辑
+    │   └── StatsPage.tsx   # 题库总量/异常数/导入统计
+    └── components/
+        ├── Layout.tsx      # 侧边导航 + 内容区
+        ├── QuestionCard.tsx# 搜索结果卡片（题型/题干/选项/答案/异常标签）
+        ├── Highlight.tsx   # 安全渲染 <mark> 高亮片段
+        ├── UploadDropzone.tsx # 多文件拖拽/选择上传
+        ├── FilterBar.tsx   # 题型/仅异常/文档筛选
+        └── StatusChip.tsx  # 状态/异常类型彩色徽标
 ```
 
 ## 3. 数据库 DDL

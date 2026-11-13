@@ -62,35 +62,34 @@ cd frontend && npm run dev    # http://127.0.0.1:5173 ，/api 已代理到 8000
 ## 2. 目录结构
 
 ```
-private-tiku/
-├── docker-compose.yml       # 单服务编排：挂载 ./data，暴露 8000
-├── .env.example             # 端口 / 数据目录样例
-├── .dockerignore / .gitignore
-├── backend/
-│   ├── Dockerfile           # 多阶段：node:20 构建前端 → python:3.11-slim 运行
-│   ├── requirements.txt
-│   ├── pytest.ini
-│   ├── scripts/
-│   │   ├── e2e_demo.sh      # 演示脚本（导入 / 手录 / 检索 / 导出全链路）
-│   │   └── smoke_test.sh    # 端到端闭环冒烟（自带启动/关闭后端）
-│   └── app/
-│       ├── main.py          # FastAPI 实例、路由注册、StaticFiles + SPA 回退
-│       ├── config.py        # 路径/端口/常量（含导入格式与文案契约）
-│       ├── db.py            # sqlite3 连接、DDL、FTS5 降级、序列化
-│       ├── models.py        # Pydantic schema + 枚举 + 错误码
-│       ├── api/             # imports / questions / libraries / search / anomalies / export
-│       ├── parser/          # reader(decode) → normalize → markdown / jsonbank → validator → pipeline
-│       │                    # 两种结构化格式共用同一套题号归一与 6 类异常校验
-│       └── tests/           # test_markdown / test_jsonbank / test_api / test_parser / test_regressions
-└── frontend/
-    ├── vite.config.ts       # base '/'，dev 代理 /api
-    ├── tailwind.config.js   # 关闭 preflight，避免与 MUI 冲突
-    └── src/
-        ├── api/client.ts    # axios 封装（baseURL /api），统一解包 + 错误
-        ├── constants/       # 导入格式契约（与后端文案逐字对齐）
-        ├── utils/           # 表单纯函数（点选答案、校验）
-        ├── components/      # Layout / QuestionCard / QuestionForm / AnswerPicker / UploadDropzone …
-        └── pages/           # Search / Import / Anomaly / QuestionDetail / QuestionCreate / Stats
+docker-compose.yml       # 单服务编排：挂载 ./data，暴露 8000
+.env.example             # 端口 / 数据目录样例
+.dockerignore / .gitignore
+backend/
+├── Dockerfile           # 多阶段：node:20 构建前端 → python:3.11-slim 运行
+├── requirements.txt
+├── pytest.ini
+├── scripts/
+│   ├── e2e_demo.sh      # 演示脚本（导入 / 手录 / 检索 / 导出全链路）
+│   └── smoke_test.sh    # 端到端闭环冒烟（自带启动/关闭后端）
+└── app/
+    ├── main.py          # FastAPI 实例、路由注册、StaticFiles + SPA 回退
+    ├── config.py        # 路径/端口/常量（含导入格式与文案契约）
+    ├── db.py            # sqlite3 连接、DDL、FTS5 降级、序列化
+    ├── models.py        # Pydantic schema + 枚举 + 错误码
+    ├── api/             # imports / questions / libraries / search / anomalies / export
+    ├── parser/          # reader(decode) → normalize → markdown / jsonbank → validator → pipeline
+    │                    # 两种结构化格式共用同一套题号归一与 6 类异常校验
+    └── tests/           # test_markdown / test_jsonbank / test_api / test_parser / test_regressions
+frontend/
+├── vite.config.ts       # base '/'，dev 代理 /api
+├── tailwind.config.js   # 关闭 preflight，避免与 MUI 冲突
+└── src/
+    ├── api/client.ts    # axios 封装（baseURL /api），统一解包 + 错误
+    ├── constants/       # 导入格式契约（与后端文案逐字对齐）
+    ├── utils/           # 表单纯函数（点选答案、校验）
+    ├── components/      # Layout / QuestionCard / QuestionForm / AnswerPicker / UploadDropzone …
+    └── pages/           # Search / Import / Anomaly / QuestionDetail / QuestionCreate / Stats
 ```
 
 ---
@@ -270,10 +269,9 @@ Markdown 往返一致性由 `tests/test_markdown.py::test_markdown_roundtrip_is_
 ## 9. CI / Docker Hub 自动发布
 
 > 流水线文件在**仓库根**：`.github/workflows/docker-publish.yml`。
-> 本项目位于仓库子目录 `private-tiku/`，因此流水线里的构建上下文是 `./private-tiku`、
-> Dockerfile 是 `./private-tiku/backend/Dockerfile`（等价于 `docker-compose.yml` 的
-> `context: .` + `dockerfile: backend/Dockerfile`）。**不要把 `.github/` 放进 `private-tiku/`**，
-> GitHub 只读取仓库根目录的 `.github/workflows/`。
+> **仓库根即项目根**，因此流水线里的构建上下文是 `.`、Dockerfile 是 `./backend/Dockerfile`
+> （与 `docker-compose.yml` 的 `context: .` + `dockerfile: backend/Dockerfile` 完全一致）。
+> `.github/workflows/` 就位于仓库根目录下，GitHub 只读取该位置。
 
 ### 9.1 首次运行前的一次性准备
 
@@ -296,7 +294,7 @@ Markdown 往返一致性由 `tests/test_markdown.py::test_markdown_roundtrip_is_
 
 | 触发 | 条件 | 结果 |
 |---|---|---|
-| push 到 `main` | 仅当 `private-tiku/**` 或该 workflow 文件本身变更 | 构建 → 自检 → 推送 |
+| push 到 `main` | 仅当 `backend/**`、`frontend/**`、`docker-compose.yml` 或该 workflow 文件本身变更 | 构建 → 自检 → 推送 |
 | push tag `v*` | 任何以 `v` 开头的标签；semver 形式（如 `v1.2.3`）会额外产出 `1.2.3` / `1.2` | 构建 → 自检 → 推送 |
 | 手动 `workflow_dispatch` | Actions 页面 Run workflow，可填一个额外 `tag` 输入 | 构建 → 自检 → 推送 |
 
@@ -358,7 +356,7 @@ docker run -d -p 8000:8000 -v "$PWD/data:/app/data" <你的DockerHub用户名>/p
 
 ### 10.1 常用命令
 
-在仓库根 `private-tiku/` 下执行（脚本只用标准库，不需要装 `backend/requirements.txt`）：
+在仓库根下执行（脚本只用标准库，不需要装 `backend/requirements.txt`）：
 
 ```bash
 # 一键备份：默认 data/tiku.db -> ./backups/tiku-YYYYmmdd-HHMMSS.db，并打印完整性校验结果
