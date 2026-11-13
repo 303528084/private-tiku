@@ -9,8 +9,7 @@
 *.jpg  binary
 *.ico  binary
 
-# 启动脚本的行尾是功能性的，不能被 core.autocrlf 改写：
-# * .bat 必须 CRLF（cmd.exe 对纯 LF 的 goto 标签有兼容性问题）
-# * .sh  必须 LF（CRLF 会让 "#!/usr/bin/env bash" 变成 "bash\r" 而无法执行）
-*.bat text eol=crlf
-*.sh  text eol=lf
+# shell 脚本的行尾是功能性的，不能被 core.autocrlf 改写：
+# .sh 必须 LF（CRLF 会让 "#!/usr/bin/env bash" 变成 "bash\r" 而无法执行）
+# 覆盖 backend/scripts/ 下的 e2e_demo.sh 与 smoke_test.sh
+*.sh text eol=lf

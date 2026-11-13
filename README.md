@@ -14,7 +14,7 @@
 
 ## 1. 快速开始
 
-### 方式 A：Docker（推荐，单容器）
+### 部署：Docker（单容器，唯一支持的部署方式）
 
 ```bash
 cp .env.example .env      # 可选：修改对外端口 TIKU_PORT
@@ -31,7 +31,7 @@ data/
 └── uploads/         # 上传的原始文件，按批次分目录
 ```
 
-### 方式 B：本地开发（Node 22 + Python 3.13 已验证）
+### 本地开发调试（非部署方式；Node 22 + Python 3.13 已验证）
 
 ```bash
 # 1) 后端依赖
@@ -214,7 +214,7 @@ judge/single_choice/multiple_choice…）；选项 `{"A":"…"}`、`A: 甲\rB: �
 ## 6. 测试
 
 ```bash
-# 全量后端测试（165 项：解析 / JSON / Markdown / API / 回归）
+# 全量后端测试（368 项：解析 / JSON / Markdown / API / 回归）
 cd backend && python -m pytest -q
 
 # 端到端冒烟（自动启停 uvicorn，35 项检查）
