@@ -134,6 +134,23 @@ def test_apply_env_keeps_absolute_paths(launcher: ModuleType, monkeypatch: pytes
 # ===========================================================================
 # 端口探测
 # ===========================================================================
+# 在**独立进程**里占住一个随机端口，并把端口号打到 stdout。
+#
+# 为什么跨进程：真实用户场景就是「另一个进程正在监听」，跨进程占位让测试拓扑
+# 与生产一致，也能顺带覆盖跨进程才有的 bind 失败码。
+#
+# 但要注意：**能否复现 P1-2（探测把被占端口判成空闲）取决于占用方是否开了
+# `SO_REUSEADDR`，与同进程/跨进程无关。** Windows 的 `SO_REUSEADDR` 只在探测方
+# 与占用方**双方都设置**时才允许抢占绑定，所以：
+#   占用方未开 REUSEADDR → 探测返回 10013/10048（两种实现都能判出被占用）
+#   占用方开了 REUSEADDR → 旧探测 bind 成功→误判空闲；新探测 SO_EXCLUSIVEADDRUSE 返回 10048
+# `python -m http.server` 的 allow_reuse_address 默认为 1，正是这种形态。
+#
+# 因此 `_occupied_port(reuse_address=True)` 这条配置是**不可删的回归关键**：
+# 删掉它，用例就退化成「占用方没开 REUSEADDR」的普通场景，再也抓不到 P1-2。
+# 同理，断言必须检查**归因文案**（是「已被其他程序占用」还是「被系统保留」），
+# 只断言 `is_port_free() is False` 是不够的——plain 占用方返回 10013 时断言照样
+# 通过，但归因是错的，这个错误当年没人检查。
 _HOLDER_SNIPPET = """
 import socket, sys
 reuse = sys.argv[1] == "reuse"
@@ -145,12 +162,6 @@ holder.listen(1)
 print(holder.getsockname()[1], flush=True)
 sys.stdin.read()
 """
-"""在**独立进程**里占住一个随机端口，并把端口号打到 stdout。
-
-为什么要跨进程：同进程内重复 ``bind()`` 在 Windows 上恰好返回 ``10013``，
-正好掩盖了真实用户场景（另一个进程在服务）里 ``10048`` 与 ``SO_REUSEADDR``
-抢占的差异——那是上一轮 QA 发现的 P1 的根因。
-"""
 
 
 @contextmanager
@@ -159,7 +170,8 @@ def _occupied_port(*, reuse_address: bool = False) -> Iterator[int]:
 
     Args:
         reuse_address: 占用方是否开 ``SO_REUSEADDR``（``python -m http.server``
-            就是这种）。
+            就是这种）。**这个参数是回归关键**：只有它为 ``True`` 时才可能触发
+            「旧探测 bind 成功、把已占端口误判成空闲」的 P1-2，删掉就再也抓不到。
 
     Yields:
         被占用的端口号。
