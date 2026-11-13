@@ -6,7 +6,9 @@
 from __future__ import annotations
 
 import logging
+import mimetypes
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncIterator
 
 from fastapi import FastAPI
@@ -15,6 +17,18 @@ from fastapi.staticfiles import StaticFiles
 
 from . import auth, config, db, migrate
 from .api import install_exception_handlers, router as api_router
+
+# ---------------------------------------------------------------------------
+# MIME 类型注册（v1.4 T05 PWA，容器与本机的差异坑）
+# ---------------------------------------------------------------------------
+# 1) ``.webmanifest``：本机 Python 3.13 的 mimetypes 恰好认识它 →
+#    ``application/manifest+json``；但容器里是 Python 3.11，通常**不认识** →
+#    返回 ``application/octet-stream`` → Chrome 判定 manifest 无效并直接拒绝
+#    安装 PWA。所以必须显式注册，不能赌运行环境的 mimetypes 数据库。
+# 2) ``.js``：3.11 是 ``application/javascript``，3.12+ 改成 ``text/javascript``。
+#    显式注册到 WHATWG 推荐值，避免「本机能装、容器里装不了」这类环境差异。
+mimetypes.add_type("application/manifest+json", ".webmanifest")
+mimetypes.add_type("text/javascript", ".js")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -107,6 +121,23 @@ def _mount_frontend(application: FastAPI) -> None:
             status_code=404, content={"code": 40401, "message": message, "data": None}
         )
 
+    def _static_response(path: Path) -> FileResponse:
+        """返回 dist 内静态文件的响应，对 PWA 的两个特殊文件显式处理。
+
+        * ``sw.js``：Service Worker 脚本**必须** ``Cache-Control: no-cache``。
+          HTTP 缓存会让浏览器长期复用旧 SW（默认按启发式新鲜度），用户永远拿不到
+          新版本——这是 PWA 最典型的「改了代码不生效」事故。
+        * ``manifest.webmanifest``：显式给 ``media_type``，不依赖 mimetypes 的
+          平台差异（见模块顶部 ``mimetypes.add_type`` 的说明）。
+        """
+        if path.name == "sw.js":
+            return FileResponse(
+                path, media_type="text/javascript", headers={"Cache-Control": "no-cache"}
+            )
+        if path.name == "manifest.webmanifest":
+            return FileResponse(path, media_type="application/manifest+json")
+        return FileResponse(path)
+
     @application.get("/{full_path:path}", include_in_schema=False, response_model=None)
     def spa_fallback(full_path: str):
         """静态文件优先，其余路径回退到 index.html（前端路由）。"""
@@ -140,7 +171,7 @@ def _mount_frontend(application: FastAPI) -> None:
                 )
                 return _not_found()
             if candidate.is_file():
-                return FileResponse(candidate)
+                return _static_response(candidate)
         if index_file.is_file():
             return FileResponse(index_file)
         return JSONResponse(
