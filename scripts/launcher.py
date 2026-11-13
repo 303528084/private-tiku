@@ -28,6 +28,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import os
 import socket
@@ -188,21 +189,58 @@ def ensure_dependencies(
     return 0
 
 
+def _configure_probe_socket(probe: socket.socket) -> None:
+    """让探测套接字的绑定语义与「uvicorn 真正 bind」一致。
+
+    **Windows 上绝不能开 ``SO_REUSEADDR``**：它的语义与 POSIX 相反，允许抢占
+    已被监听的端口。实测（占用方都是真实进程，探测 socket 开 REUSEADDR）：
+
+    ==========================  ==========================  ==========================
+    占用方                       探测结果                    后果
+    ==========================  ==========================  ==========================
+    普通 socket（未开 REUSEADDR） ``WinError 10013``           误报「被系统保留」
+    开了 ``SO_REUSEADDR``         ``bind() 成功``             误判空闲 → uvicorn 10048 崩
+    ==========================  ==========================  ==========================
+
+    也就是说：开着 REUSEADDR 时 ``10048`` 永远不可能返回，「被占用」这个分支
+    在生产路径上是死代码。改用 ``SO_EXCLUSIVEADDRUSE`` 后两种情况都稳定返回
+    ``WinError 10048``，与 asyncio 在 Windows 上的行为一致
+    （``reuse_address`` 默认仅在 POSIX 为真，所以 uvicorn 的 bind 也是这个语义）。
+
+    POSIX 保留 ``SO_REUSEADDR``：它只允许绑定 ``TIME_WAIT`` 状态的端口，
+    不会抢占正在 LISTEN 的端口，与 uvicorn 的 ``reuse_address=True`` 一致。
+
+    Args:
+        probe: 待配置的探测套接字。
+    """
+    if sys.platform.startswith("win"):
+        exclusive = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
+        if exclusive is not None:
+            probe.setsockopt(socket.SOL_SOCKET, exclusive, 1)
+        return
+    probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+
 def probe_port(port: int, host: str = "127.0.0.1") -> Optional[OSError]:
     """尝试绑定端口，返回失败原因（成功时返回 None）。
 
     保留 ``OSError`` 而不是只返回布尔值，是为了让调用方能区分「被别的程序占用」
     与「被系统保留（``WinError 10013``）」——两者的处置建议完全不同。
 
+    为什么不用 ``connect_ex()`` 二次确认：实测在 Windows 上，对一个**刚被自己
+    bind 过又关闭**的端口做 ``connect`` 会返回 0（幽灵连接），于是每个空闲端口
+    都被判成「有服务在听」。``SO_EXCLUSIVEADDRUSE`` 已经足够区分三种情况
+    （见 :func:`_configure_probe_socket` 的矩阵），不要再叠加连接探测。
+
     Args:
         port: 待检测端口。
         host: 监听地址。
 
     Returns:
-        绑定失败的异常；成功返回 None。
+        绑定失败的异常；端口可用时返回 None。
     """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        _configure_probe_socket(probe)
         try:
             probe.bind((host, port))
         except OSError as exc:
@@ -213,9 +251,9 @@ def probe_port(port: int, host: str = "127.0.0.1") -> Optional[OSError]:
 def is_port_free(port: int, host: str = "127.0.0.1") -> bool:
     """判断端口能否被绑定。
 
-    用 ``bind()`` 而不是 ``connect_ex()``：端口上没有服务在听，也可能因为
-    ``SO_EXCLUSIVEADDRUSE`` / 被其他进程以通配地址占用而无法绑定，``connect``
-    会误判为「空闲」，启动时才炸。
+    不能只用 ``connect_ex()``：端口上没有服务在听，也可能因为被其他进程以
+    通配地址占用、或落在系统保留段而无法绑定，``connect`` 会误判为「空闲」，
+    启动时才炸。反过来也不能只用 ``bind()``，理由见 :func:`probe_port`。
 
     Args:
         port: 待检测端口。
@@ -265,7 +303,12 @@ def describe_port_failure(error: Optional[OSError]) -> str:
         if winerror is not None:
             return f"被系统保留或无权限（Windows WinError {winerror}）"
         return f"无权限绑定（errno {error.errno}）"
-    if getattr(error, "winerror", None) == 10048 or error.errno in (48, 98):
+    if getattr(error, "winerror", None) == errno.EADDRINUSE or error.errno in (
+        errno.EADDRINUSE,
+        48,
+        98,
+        10048,
+    ):
         return "已被其他程序占用"
     return f"绑定失败（{error}）"
 
@@ -408,7 +451,37 @@ def resolve_requested_port(
         return DEFAULT_BASE_PORT, None
     if not 0 < port <= 65535:
         return DEFAULT_BASE_PORT, None
+    if port == DEFAULT_BASE_PORT:
+        # ``.env.example`` 出厂就是 ``TIKU_PORT=8000``：新用户从没「指定」过
+        # 端口，对他说「你指定的端口 8000 不可用」只会让人困惑。值等于默认
+        # 端口时按默认处理，走轻量提示。
+        return port, None
     return port, "TIKU_PORT"
+
+
+def summarize_port_failures(failures: List[Tuple[int, OSError]]) -> str:
+    """把一批端口失败记录汇总成一句话，例如「58 个被系统保留，1 个已被其他程序占用」。
+
+    只报「起始端口为什么不可用」是不够的：起始端口落在 Windows 保留段时，
+    用户看到的是「被系统保留」，而真正让服务换到 8059 的原因可能是 8058
+    被别的程序占了。两类原因必须同时说清楚，否则用户排查方向还是错的。
+
+    Args:
+        failures: :func:`scan_ports` 返回的失败列表。
+
+    Returns:
+        汇总描述。
+    """
+    if not failures:
+        return "无"
+    reserved = sum(1 for _port, error in failures if is_reserved_port_error(error))
+    busy = len(failures) - reserved
+    parts: List[str] = []
+    if reserved:
+        parts.append(f"{reserved} 个被系统保留")
+    if busy:
+        parts.append(f"{busy} 个已被其他程序占用")
+    return "，".join(parts) or "原因未知"
 
 
 def _report_no_free_port(base: int, failures: List[Tuple[int, OSError]]) -> None:
@@ -476,14 +549,20 @@ def serve(base_port: Optional[int] = None, host: str = "127.0.0.1", timeout: flo
         _report_no_free_port(requested_port, failures)
         return 1
     if free_port != requested_port:
-        reason = describe_port_failure(probe_port(requested_port, host))
-        if source:
+        prefix = (
+            f"你指定的端口 {requested_port}（来自 {source}）"
+            if source
+            else f"端口 {requested_port}"
+        )
+        print(f"[提示] {prefix} 不可用：{describe_port_failure(probe_port(requested_port, host))}")
+        if failures:
+            first, last = failures[0][0], failures[-1][0]
             print(
-                f"[提示] 你指定的端口 {requested_port}（来自 {source}）不可用：{reason}；"
-                f"已改用 {free_port}"
+                f"       {first}~{last} 共 {len(failures)} 个端口不可用"
+                f"（{summarize_port_failures(failures)}），已改用 {free_port}"
             )
         else:
-            print(f"[提示] 端口 {requested_port} 不可用：{reason}；已改用 {free_port}")
+            print(f"       已改用 {free_port}")
     port = free_port
 
     url = f"http://{host}:{port}"

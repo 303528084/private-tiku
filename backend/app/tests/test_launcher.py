@@ -12,9 +12,11 @@ from __future__ import annotations
 import importlib.util
 import os
 import socket
+import subprocess
 import sys
 import threading
 import time
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from types import ModuleType
@@ -132,44 +134,156 @@ def test_apply_env_keeps_absolute_paths(launcher: ModuleType, monkeypatch: pytes
 # ===========================================================================
 # 端口探测
 # ===========================================================================
-def _occupy_port() -> Tuple[socket.socket, int]:
-    """占用一个随机空闲端口，返回 ``(socket, port)``；调用方负责关闭。"""
-    holder = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    holder.bind(("127.0.0.1", 0))
-    holder.listen(1)
-    return holder, holder.getsockname()[1]
+_HOLDER_SNIPPET = """
+import socket, sys
+reuse = sys.argv[1] == "reuse"
+holder = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+if reuse:
+    holder.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+holder.bind(("127.0.0.1", 0))
+holder.listen(1)
+print(holder.getsockname()[1], flush=True)
+sys.stdin.read()
+"""
+"""在**独立进程**里占住一个随机端口，并把端口号打到 stdout。
+
+为什么要跨进程：同进程内重复 ``bind()`` 在 Windows 上恰好返回 ``10013``，
+正好掩盖了真实用户场景（另一个进程在服务）里 ``10048`` 与 ``SO_REUSEADDR``
+抢占的差异——那是上一轮 QA 发现的 P1 的根因。
+"""
+
+
+@contextmanager
+def _occupied_port(*, reuse_address: bool = False) -> Iterator[int]:
+    """用独立进程占住一个端口，yield 端口号，退出时杀掉进程。
+
+    Args:
+        reuse_address: 占用方是否开 ``SO_REUSEADDR``（``python -m http.server``
+            就是这种）。
+
+    Yields:
+        被占用的端口号。
+    """
+    proc = subprocess.Popen(
+        [sys.executable, "-c", _HOLDER_SNIPPET, "reuse" if reuse_address else "plain"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert proc.stdout is not None
+        port = int(proc.stdout.readline().strip())
+        yield port
+    finally:
+        proc.kill()
+        proc.wait(timeout=10)
+
+
+def _free_port() -> int:
+    """取一个当前空闲的端口号（绑定 0 再立刻释放）。"""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
 
 
 def test_find_free_port_skips_occupied_port(launcher: ModuleType) -> None:
     """起始端口被占用时向上顺延，返回第一个可用端口。"""
-    holder, taken = _occupy_port()
-    try:
+    with _occupied_port() as taken:
         assert launcher.is_port_free(taken) is False
         found = launcher.find_free_port(taken, span=10)
         assert found is not None
         assert found > taken, f"应当跳过被占用的 {taken}，实际返回 {found}"
         assert launcher.is_port_free(found) is True
-    finally:
-        holder.close()
 
 
 def test_find_free_port_returns_base_when_free(launcher: ModuleType) -> None:
     """起始端口空闲时直接返回它，不做多余顺延。"""
-    holder, port = _occupy_port()
-    holder.close()  # 立刻释放，端口回到空闲
-    time.sleep(0.05)
+    port = _free_port()
 
     assert launcher.find_free_port(port, span=1) == port
 
 
 def test_find_free_port_returns_none_when_span_exhausted(launcher: ModuleType) -> None:
     """范围内全被占用时返回 None，由调用方给出明确错误而不是盲目启动。"""
-    holder, taken = _occupy_port()
-    try:
+    with _occupied_port() as taken:
         # span=1 表示只试 taken 这一个端口，必然失败
         assert launcher.find_free_port(taken, span=1) is None
+
+
+def test_probe_port_sees_listener_that_enabled_reuseaddr(launcher: ModuleType) -> None:
+    """占用方开了 ``SO_REUSEADDR`` 时不能误判成空闲（P1 回归）。
+
+    探测 socket 自己开 ``SO_REUSEADDR`` 时，Windows 允许它抢占已被监听的端口，
+    ``bind()`` 返回成功 → 判成空闲 → uvicorn 起来时 10048 崩溃，用户只看到
+    「Startup failed」，自动顺延完全没触发。
+    """
+    with _occupied_port(reuse_address=True) as taken:
+        assert launcher.is_port_free(taken) is False, "开了 SO_REUSEADDR 的占用方被误判成空闲"
+        error = launcher.probe_port(taken)
+        assert error is not None
+        assert launcher.describe_port_failure(error) == "已被其他程序占用"
+
+
+def test_probe_port_reports_busy_port_as_busy_not_reserved(launcher: ModuleType) -> None:
+    """普通占用方必须报「被占用」，不能报「被系统保留」（P1 回归）。"""
+    with _occupied_port() as taken:
+        error = launcher.probe_port(taken)
+        assert error is not None
+        assert launcher.is_reserved_port_error(error) is False, (
+            "被占用却归因成系统保留："
+            f"{error!r}（winerror={getattr(error, 'winerror', None)}）"
+        )
+        assert launcher.describe_port_failure(error) == "已被其他程序占用"
+        if sys.platform.startswith("win"):
+            assert getattr(error, "winerror", None) == 10048, (
+                f"Windows 上被占用的端口应返回 10048，实际 {error!r}"
+            )
+
+
+def test_probe_port_marks_windows_reserved_range_as_reserved(launcher: ModuleType) -> None:
+    """系统保留段（本机 7958~8057）必须归因为「被系统保留」，而不是「被占用」。
+
+    保留段的位置随机器而变，这里扫描已知的 Windows 保留区间，找到第一个
+    返回 ``WinError 10013`` 的端口来验证归因。机器上没有保留段（如 Linux CI）
+    时跳过，并说明原因——不伪造数据。
+    """
+    if not sys.platform.startswith("win"):
+        pytest.skip("Windows 保留端口段只在 Windows 上存在")
+
+    reserved_error: Any = None
+    for candidate in range(7958, 8058):
+        error = launcher.probe_port(candidate)
+        if error is not None and getattr(error, "winerror", None) == 10013:
+            reserved_error = error
+            break
+
+    if reserved_error is None:
+        pytest.skip("本机 7958~8057 没有保留段（Hyper-V / WSL / Docker 未占用），无法验证归因")
+
+    assert launcher.is_reserved_port_error(reserved_error) is True
+    assert "保留" in launcher.describe_port_failure(reserved_error)
+    assert "占用" not in launcher.describe_port_failure(reserved_error)
+
+
+def test_probe_socket_uses_exclusive_addr_use_on_windows(launcher: ModuleType) -> None:
+    """探测 socket 在 Windows 上必须用 ``SO_EXCLUSIVEADDRUSE``。
+
+    Windows 的 ``SO_REUSEADDR`` 语义与 POSIX 相反，开了就等于放弃独占，
+    这是「10048 分支永远是死代码」的根因。
+    """
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        launcher._configure_probe_socket(probe)
+        reuse = probe.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR)
+        if sys.platform.startswith("win"):
+            assert reuse == 0, "Windows 上不能开 SO_REUSEADDR，否则占用中的端口会被判成空闲"
+            exclusive = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
+            if exclusive is not None:
+                assert probe.getsockopt(socket.SOL_SOCKET, exclusive) != 0
+        else:
+            assert reuse != 0, "POSIX 上要能绑 TIME_WAIT 端口"
     finally:
-        holder.close()
+        probe.close()
 
 
 def test_find_free_port_stops_at_port_limit(launcher: ModuleType) -> None:
@@ -415,6 +529,47 @@ def test_serve_picks_up_free_port_after_reserved_block(
     assert "已改用 8058" in stdout
 
 
+def test_serve_reports_both_reasons_when_reserved_and_busy_mix(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """保留段与「被占用」同时出现时，两个原因都要说清楚。
+
+    真实场景：本机 7958~8057 是保留段（10013），而 8058 恰好被
+    ``python -m http.server`` 占着（10048），最终选到 8059。只报「起始端口
+    8000 被系统保留」会让用户以为 8058 也是保留的，排查方向还是错的。
+    """
+    reserved = OSError(13, "access denied")
+    reserved.winerror = 10013  # type: ignore[attr-defined]
+    busy = OSError(10048, "address already in use")
+    busy.winerror = 10048  # type: ignore[attr-defined]
+    failures = [(port, reserved) for port in range(8000, 8058)] + [(8058, busy)]
+    recorded: Dict[str, Any] = {}
+
+    monkeypatch.setattr(launcher, "parse_env_file", lambda _path: {})
+    monkeypatch.setattr(launcher, "apply_env", lambda _values: [])
+    monkeypatch.setattr(launcher, "scan_ports", lambda *_args, **_kwargs: (8059, failures))
+    monkeypatch.setattr(launcher, "probe_port", lambda *_args, **_kwargs: reserved)
+    monkeypatch.setattr(launcher, "wait_for_health", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(launcher, "open_browser", lambda _url: True)
+
+    fake_uvicorn = ModuleType("uvicorn")
+    fake_uvicorn.run = lambda *_args, **kwargs: recorded.update(kwargs)  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "uvicorn", fake_uvicorn)
+
+    original_cwd = Path.cwd()
+    try:
+        assert launcher.serve(base_port=8000) == 0
+    finally:
+        os.chdir(original_cwd)
+
+    stdout = capsys.readouterr().out
+    assert recorded["port"] == 8059
+    assert "58 个被系统保留" in stdout, f"缺少保留段计数：{stdout}"
+    assert "1 个已被其他程序占用" in stdout, f"缺少占用计数：{stdout}"
+    assert "8000~8058" in stdout, f"缺少实际跳过区间：{stdout}"
+    assert "已改用 8059" in stdout
+
+
 # ===========================================================================
 # 就绪探测
 # ===========================================================================
@@ -469,9 +624,7 @@ def test_wait_for_health_times_out_on_non_2xx(
 
 def test_wait_for_health_times_out_on_closed_port(launcher: ModuleType) -> None:
     """端口没人监听时也要按时超时返回，而不是抛异常。"""
-    holder, port = _occupy_port()
-    holder.close()
-    time.sleep(0.05)
+    port = _free_port()
 
     assert launcher.wait_for_health(f"http://127.0.0.1:{port}/api/health", timeout=0.4, interval=0.1) is False
 
@@ -600,11 +753,21 @@ def test_resolve_base_port_falls_back_on_invalid_value(launcher: ModuleType, raw
     assert launcher.resolve_base_port(None, {"TIKU_PORT": raw}) == launcher.DEFAULT_BASE_PORT
 
 
+def test_env_default_port_is_not_reported_as_user_chosen(launcher: ModuleType) -> None:
+    """``.env.example`` 出厂就是 ``TIKU_PORT=8000``，新用户没「指定」过端口。
+
+    否则开箱即用的人第一次双击就看到「你指定的端口 8000 不可用」，可他什么
+    都没指定过。值等于默认端口时按默认处理（走轻量提示）。
+    """
+    assert launcher.resolve_requested_port(None, {"TIKU_PORT": "8000"}) == (8000, None)
+    assert launcher.resolve_requested_port(None, {"TIKU_PORT": "9000"}) == (9000, "TIKU_PORT")
+    assert launcher.resolve_requested_port(8000, {"TIKU_PORT": "9000"})[1] == "命令行 --base-port"
+    assert launcher.resolve_requested_port(None, {}) == (launcher.DEFAULT_BASE_PORT, None)
+
+
 def test_port_subcommand_prints_a_number(launcher: ModuleType, capsys: pytest.CaptureFixture[str]) -> None:
     """``port`` 子命令把端口打到 stdout（供 shell 用 ``$(...)`` 捕获）。"""
-    holder, port = _occupy_port()
-    holder.close()
-    time.sleep(0.05)
+    port = _free_port()
 
     assert launcher.main(["port", "--base", str(port), "--span", "1"]) == 0
     assert capsys.readouterr().out.strip() == str(port)
@@ -614,9 +777,7 @@ def test_wait_subcommand_returns_nonzero_on_timeout(
     launcher: ModuleType, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """``wait`` 超时返回 1，错误信息走 stderr。"""
-    holder, port = _occupy_port()
-    holder.close()
-    time.sleep(0.05)
+    port = _free_port()
 
     code = launcher.main(["wait", "--url", f"http://127.0.0.1:{port}/api/health", "--timeout", "0.3"])
 
