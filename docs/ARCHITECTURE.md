@@ -299,7 +299,7 @@ postcss 8.4.39 · autoprefixer 10.4.19 · @types/react 18.3.3 · @types/react-do
 | `README.md` | 改 | 导入说明、格式表、依赖说明、已知限制中所有 docx/txt/pdf 表述 |
 | `docs/ARCHITECTURE.md` | 改 | 本节 |
 
-CI/部署：无 CI 配置；`backend/Dockerfile` 与 `deploy/fnos` 不引用被删依赖，**无需改动**（构建走 `requirements.txt`）。
+CI/部署：CI 流水线见仓库根 `.github/workflows/docker-publish.yml`（构建上下文 `.`、Dockerfile `./backend/Dockerfile`，流程为构建 → 起容器自检 → 推送 Docker Hub）；`backend/Dockerfile` 不引用被删依赖，**无需改动**（构建走 `requirements.txt`）。`deploy/fnos` 为本地专用部署配置，不入库。
 
 ### 2. Markdown 解析器设计
 
