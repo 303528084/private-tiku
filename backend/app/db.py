@@ -16,7 +16,7 @@ import sqlite3
 import threading
 from typing import Any, Dict, Iterator, List, Optional, Sequence
 
-from . import config
+from . import config, migrate
 
 # ---------------------------------------------------------------------------
 # 全局状态
@@ -200,7 +200,14 @@ def _create_fts(conn: sqlite3.Connection) -> bool:
 
 
 def init_db() -> None:
-    """建库建表（幂等），并重建 FTS 索引以确保一致性。"""
+    """建库建表（幂等）→ 版本化迁移 → 重建 FTS 索引以确保一致性。
+
+    迁移在**基础 DDL 之后**执行：``migrate.run_migrations`` 需要 ``questions``
+    表已存在才能判断「空库 / 非空库」，从而决定要不要做迁移前备份。
+
+    Raises:
+        migrate.MigrationError: 迁移前备份失败或迁移语句失败（拒绝启动）。
+    """
     global FTS_TRIGRAM, _initialized
     with _init_lock:
         if _initialized:
@@ -210,6 +217,8 @@ def init_db() -> None:
             for stmt in BASE_DDL:
                 conn.execute(stmt)
             FTS_TRIGRAM = _create_fts(conn)
+            # v1.4 T04：把 PRAGMA user_version 推到 SCHEMA_VERSION（幂等，空库零开销）
+            migrate.run_migrations(conn)
             try:
                 conn.execute("INSERT INTO questions_fts(questions_fts) VALUES('rebuild')")
             except sqlite3.OperationalError:
@@ -405,8 +414,13 @@ def count_same_number(conn: sqlite3.Connection, import_file_id: int, question_no
 # ---------------------------------------------------------------------------
 # 手录题库（v1.3）：import_files 即题库载体，不加表、不迁移
 # ---------------------------------------------------------------------------
-LIBRARY_KINDS: frozenset[str] = frozenset({"manual", "json", "md", "docx", "txt", "pdf"})
-"""``GET /api/libraries`` 的 ``kind`` 白名单；不在其中的脏值统一归 ``other``。"""
+LIBRARY_KINDS: frozenset[str] = frozenset(
+    {"manual", "json", "md", "share", "docx", "txt", "pdf"}
+)
+"""``GET /api/libraries`` 的 ``kind`` 白名单；不在其中的脏值统一归 ``other``。
+
+``share`` 是 v1.4 分享包导入产生的题库类型（``config.SHARE_FILE_TYPE``）。
+"""
 
 LIBRARY_AGGREGATE_SQL: str = """
 SELECT
