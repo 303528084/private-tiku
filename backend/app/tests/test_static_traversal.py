@@ -179,7 +179,23 @@ def test_deep_traversal_to_absolute_path_returns_404() -> None:
 # ===========================================================================
 # 功能不能改坏
 # ===========================================================================
-def test_static_file_still_served() -> None:
+@pytest.fixture(scope="module")
+def built_frontend() -> Path:
+    """前端构建产物目录；未构建时跳过（并给出可执行的修复命令）。
+
+    CI 里 pytest 通常跑在 ``npm run build`` 之前，``frontend/dist`` 还不存在，
+    这时下面 3 条「静态资源仍可访问」的用例必然失败——它们断言的是**产物**，
+    不是代码。跳过消息与 ``test_pwa.py`` 的 ``dist_dir`` 保持一致。
+
+    **只挂这 3 条用例**：上面的路径穿越用例断言的是「404 + 响应体不含泄漏特征」，
+    与 dist 是否存在无关，必须继续跑——把它们一起 skip 掉等于把 P0 回归网拆了。
+    """
+    if not (config.FRONTEND_DIST / "index.html").is_file():
+        pytest.skip("frontend/dist 未构建，跳过静态资源相关断言：cd frontend && npm run build")
+    return config.FRONTEND_DIST
+
+
+def test_static_file_still_served(built_frontend: Path) -> None:
     """``/favicon.svg`` 仍能正常返回（``image/svg+xml``）。"""
     status, headers, body = request("/favicon.svg")
 
@@ -188,7 +204,7 @@ def test_static_file_still_served() -> None:
     assert b"<svg" in body.lower()
 
 
-def test_spa_route_falls_back_to_index_html() -> None:
+def test_spa_route_falls_back_to_index_html(built_frontend: Path) -> None:
     """正常前端路由（``/questions/1``）仍回退到 ``index.html``。"""
     status, headers, body = request("/questions/1")
 
@@ -197,7 +213,7 @@ def test_spa_route_falls_back_to_index_html() -> None:
     assert b'<div id="root">' in body
 
 
-def test_root_path_returns_index_html() -> None:
+def test_root_path_returns_index_html(built_frontend: Path) -> None:
     """``/`` 仍返回 SPA 壳。"""
     status, headers, body = request("/")
 

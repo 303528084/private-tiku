@@ -549,12 +549,14 @@ def serve(base_port: Optional[int] = None, host: str = "127.0.0.1", timeout: flo
         _report_no_free_port(requested_port, failures)
         return 1
     if free_port != requested_port:
-        prefix = (
-            f"你指定的端口 {requested_port}（来自 {source}）"
-            if source
-            else f"端口 {requested_port}"
-        )
-        print(f"[提示] {prefix} 不可用：{describe_port_failure(probe_port(requested_port, host))}")
+        reason = describe_port_failure(probe_port(requested_port, host))
+        # 两个分支各自给出完整句子，不靠「前缀 + 统一模板」拼接：
+        # 「（来自 TIKU_PORT）」以全角括号结尾，后面直接接「不可用」，中间不能有空格；
+        # 「端口 8000」以半角数字结尾，后面必须有一个空格。用模板拼接时两者必有一处出错。
+        if source:
+            print(f"[提示] 你指定的端口 {requested_port}（来自 {source}）不可用：{reason}")
+        else:
+            print(f"[提示] 端口 {requested_port} 不可用：{reason}")
         if failures:
             first, last = failures[0][0], failures[-1][0]
             print(

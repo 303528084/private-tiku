@@ -20,7 +20,7 @@ from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Dict, Iterator, List, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import pytest
 
@@ -568,6 +568,102 @@ def test_serve_reports_both_reasons_when_reserved_and_busy_mix(
     assert "1 个已被其他程序占用" in stdout, f"缺少占用计数：{stdout}"
     assert "8000~8058" in stdout, f"缺少实际跳过区间：{stdout}"
     assert "已改用 8059" in stdout
+
+
+def _run_serve_and_capture_first_line(
+    launcher: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    *,
+    env_values: Dict[str, str],
+    base_port: Optional[int],
+    requested_error: OSError,
+    free_port: int,
+) -> str:
+    """跑一次 ``serve()``，返回 stdout 的第一行（端口提示行）。
+
+    把端口扫描、健康检查、浏览器全部打桩，只留被测的提示文案。``serve()``
+    在启动就绪线程之前同步打印提示行，所以第一行是确定的。
+
+    Args:
+        launcher: 已加载的启动器模块。
+        monkeypatch: pytest 的 monkeypatch fixture。
+        capsys: pytest 的输出捕获 fixture。
+        env_values: ``parse_env_file`` 的返回值（模拟 ``.env`` 内容）。
+        base_port: 传给 ``serve()`` 的起始端口。
+        requested_error: ``probe_port`` 对起始端口返回的失败异常。
+        free_port: ``scan_ports`` 返回的可用端口。
+
+    Returns:
+        stdout 的第一行。
+    """
+    recorded: Dict[str, Any] = {}
+    monkeypatch.setattr(launcher, "parse_env_file", lambda _path: dict(env_values))
+    monkeypatch.setattr(launcher, "apply_env", lambda _values: [])
+    # 真实环境里可能残留 TIKU_PORT（别的用例 apply_env 过），先清掉再让 .env 说了算
+    monkeypatch.delenv("TIKU_PORT", raising=False)
+    monkeypatch.setattr(launcher, "scan_ports", lambda *_a, **_k: (free_port, [(0, requested_error)]))
+    monkeypatch.setattr(launcher, "probe_port", lambda *_a, **_k: requested_error)
+    monkeypatch.setattr(launcher, "wait_for_health", lambda *_a, **_k: True)
+    monkeypatch.setattr(launcher, "open_browser", lambda _url: True)
+
+    fake_uvicorn = ModuleType("uvicorn")
+    fake_uvicorn.run = lambda *_a, **kwargs: recorded.update(kwargs)  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "uvicorn", fake_uvicorn)
+
+    original_cwd = Path.cwd()
+    try:
+        assert launcher.serve(base_port=base_port) == 0
+    finally:
+        os.chdir(original_cwd)
+
+    return capsys.readouterr().out.splitlines()[0]
+
+
+def test_port_notice_has_no_space_after_fullwidth_paren(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``（来自 TIKU_PORT）`` 是全角括号结尾，后面**不能**再接空格。
+
+    回归用例：之前用「前缀 + 统一模板」拼接，实际输出成
+    ``你指定的端口 9000（来自 TIKU_PORT） 不可用：…``，全角括号后多一个空格。
+    """
+    busy = OSError(10048, "address already in use")
+    busy.winerror = 10048  # type: ignore[attr-defined]
+
+    line = _run_serve_and_capture_first_line(
+        launcher,
+        monkeypatch,
+        capsys,
+        env_values={"TIKU_PORT": "9000"},
+        base_port=None,
+        requested_error=busy,
+        free_port=9001,
+    )
+
+    assert line == "[提示] 你指定的端口 9000（来自 TIKU_PORT）不可用：已被其他程序占用"
+
+
+def test_port_notice_has_one_space_after_halfwidth_number(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``端口 8000`` 以半角数字结尾，后面**要有**一个空格，否则中文数字会黏在一起。"""
+    reserved = OSError(13, "access denied")
+    reserved.winerror = 10013  # type: ignore[attr-defined]
+
+    line = _run_serve_and_capture_first_line(
+        launcher,
+        monkeypatch,
+        capsys,
+        env_values={},
+        base_port=None,
+        requested_error=reserved,
+        free_port=8058,
+    )
+
+    assert line == (
+        "[提示] 端口 8000 不可用：被系统保留或无权限（Windows WinError 10013）"
+    )
 
 
 # ===========================================================================
