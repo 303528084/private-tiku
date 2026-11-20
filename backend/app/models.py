@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -62,6 +62,24 @@ class FileStatus(str, Enum):
 
     parsed = "parsed"
     failed = "failed"
+
+
+class ExamMode(str, Enum):
+    """练习/考试模式（v1.5）。
+
+    * ``practice``：逐题作答即时判分（提交单题立刻返回对错与正确答案）。
+    * ``exam``：模拟考试，作答期间不返回答案，交卷后统一判分。
+    """
+
+    practice = "practice"
+    exam = "exam"
+
+
+class ExamStatus(str, Enum):
+    """一场练习/考试的状态。"""
+
+    in_progress = "in_progress"
+    finished = "finished"
 
 
 # 便于校验集合
@@ -140,6 +158,26 @@ class LoginRequest(BaseModel):
     """POST /api/auth/login 请求体（v1.4 T01 门禁）。"""
 
     token: str = Field(default="", description="访问口令（TIKU_ACCESS_TOKEN 的值）")
+
+
+class ExamCreateRequest(BaseModel):
+    """POST /api/exams 请求体（v1.5 开一场练习/考试）。"""
+
+    mode: str = Field(default="practice", description="practice 练习 / exam 模拟考试")
+    library_ids: List[int] = Field(
+        default_factory=list, description="题库范围（import_files.id 列表）；空 = 全部题库"
+    )
+    count: int = Field(default=20, ge=1, le=200, description="请求题数（1–200）")
+    qtypes: List[str] = Field(
+        default_factory=list, description="题型筛选（single/multiple/judge）；空 = 不限"
+    )
+
+
+class ExamAnswerRequest(BaseModel):
+    """POST /api/exams/{id}/answers 请求体（提交单题作答）。"""
+
+    seq: int = Field(ge=1, description="题号（试卷内第几题，1 起）")
+    answer: str = Field(default="", description="作答内容（字母串或 √/×）")
 
 
 # ---------------------------------------------------------------------------

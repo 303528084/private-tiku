@@ -85,26 +85,26 @@ def _backup_files(directory: Path) -> list[Path]:
 # ① 全新空库
 # ===========================================================================
 def test_fresh_db_stamps_version_without_backup(data_dir: Path) -> None:
-    """全新空库：置 ``user_version=1``、写 1 条审计记录、**不产生备份**。"""
+    """全新空库：置 ``user_version=SCHEMA_VERSION``、逐版本写审计记录、**不产生备份**。"""
     db.init_db()
 
     conn = _connect(data_dir / "tiku.db")
     try:
-        assert migrate.user_version(conn) == migrate.SCHEMA_VERSION == 1
+        assert migrate.user_version(conn) == migrate.SCHEMA_VERSION == 2
         rows = conn.execute("SELECT * FROM schema_version ORDER BY version").fetchall()
     finally:
         conn.close()
 
-    assert len(rows) == 1
-    assert int(rows[0]["version"]) == 1
-    assert rows[0]["applied_at"]
-    assert rows[0]["backup_path"] == ""
-    assert rows[0]["note"]
+    assert len(rows) == 2
+    assert [int(row["version"]) for row in rows] == [1, 2]
+    assert all(row["applied_at"] for row in rows)
+    assert all(row["backup_path"] == "" for row in rows)
+    assert all(row["note"] for row in rows)
     assert _backup_files(data_dir) == []
 
 
 def test_fresh_db_second_init_is_noop(data_dir: Path) -> None:
-    """④ 幂等：第二次 ``init_db()`` 不备份、审计表仍只有 1 条。"""
+    """④ 幂等：第二次 ``init_db()`` 不备份、审计表仍只有逐版本的记录。"""
     db.init_db()
     first = _backup_files(data_dir)
     db.reset_init_flag()
@@ -115,18 +115,18 @@ def test_fresh_db_second_init_is_noop(data_dir: Path) -> None:
 
     conn = _connect(data_dir / "tiku.db")
     try:
-        assert migrate.user_version(conn) == 1
+        assert migrate.user_version(conn) == migrate.SCHEMA_VERSION
         count = conn.execute("SELECT COUNT(*) AS c FROM schema_version").fetchone()["c"]
     finally:
         conn.close()
-    assert int(count) == 1
+    assert int(count) == len(migrate.MIGRATIONS)
 
 
 # ===========================================================================
 # ② 有数据的老库
 # ===========================================================================
 def test_legacy_db_with_data_is_backed_up(data_dir: Path) -> None:
-    """老库（``user_version=0`` 且有题）：自动备份 + 校验通过 + 置 1。"""
+    """老库（``user_version=0`` 且有题）：自动备份 + 校验通过 + 置到最新版本。"""
     db_path = data_dir / "tiku.db"
     _make_legacy_db(db_path, question_count=3)
 
@@ -135,7 +135,8 @@ def test_legacy_db_with_data_is_backed_up(data_dir: Path) -> None:
     backups = _backup_files(data_dir)
     assert len(backups) == 1, backups
     backup = backups[0]
-    assert backup.name.startswith("pre-migrate-v1-")
+    # 备份文件名以「目标版本」命名（迁移到 v2 时产生的备份）
+    assert backup.name.startswith(f"pre-migrate-v{migrate.SCHEMA_VERSION}-")
 
     # 备份文件自身可用
     check = sqlite3.connect(str(backup))
@@ -149,8 +150,10 @@ def test_legacy_db_with_data_is_backed_up(data_dir: Path) -> None:
 
     conn = _connect(db_path)
     try:
-        assert migrate.user_version(conn) == 1
-        row = conn.execute("SELECT * FROM schema_version WHERE version = 1").fetchone()
+        assert migrate.user_version(conn) == migrate.SCHEMA_VERSION
+        row = conn.execute(
+            "SELECT * FROM schema_version WHERE version = ?", (migrate.SCHEMA_VERSION,)
+        ).fetchone()
         assert int(conn.execute("SELECT COUNT(*) FROM questions").fetchone()[0]) == 3
     finally:
         conn.close()
@@ -204,8 +207,11 @@ def test_skip_backup_switch_bypasses_backup(
     assert _backup_files(data_dir) == []
     conn = _connect(db_path)
     try:
-        assert migrate.user_version(conn) == 1
-        row = conn.execute("SELECT backup_path FROM schema_version WHERE version = 1").fetchone()
+        assert migrate.user_version(conn) == migrate.SCHEMA_VERSION
+        row = conn.execute(
+            "SELECT backup_path FROM schema_version WHERE version = ?",
+            (migrate.SCHEMA_VERSION,),
+        ).fetchone()
     finally:
         conn.close()
     assert row is not None and row["backup_path"] == ""

@@ -42,7 +42,7 @@ logger = logging.getLogger("private_tiku.migrate")
 # ---------------------------------------------------------------------------
 # 版本定义
 # ---------------------------------------------------------------------------
-SCHEMA_VERSION: int = 1
+SCHEMA_VERSION: int = 2
 """当前代码期望的数据库结构版本（``PRAGMA user_version`` 的目标值）。"""
 
 MIGRATIONS: List[Tuple[int, List[str]]] = [
@@ -59,6 +59,47 @@ MIGRATIONS: List[Tuple[int, List[str]]] = [
             """,
         ],
     ),
+    (
+        2,
+        [
+            """
+            CREATE TABLE IF NOT EXISTS exams (
+              id              INTEGER PRIMARY KEY AUTOINCREMENT,
+              mode            TEXT    NOT NULL DEFAULT 'practice',
+              title           TEXT    NOT NULL DEFAULT '',
+              scope_json      TEXT    NOT NULL DEFAULT '[]',
+              requested_count INTEGER NOT NULL DEFAULT 0,
+              question_count  INTEGER NOT NULL DEFAULT 0,
+              status          TEXT    NOT NULL DEFAULT 'in_progress',
+              score           REAL    NOT NULL DEFAULT 0,
+              correct_count   INTEGER NOT NULL DEFAULT 0,
+              answered_count  INTEGER NOT NULL DEFAULT 0,
+              created_at      TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
+              finished_at     TEXT
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_exams_status ON exams(status)",
+            "CREATE INDEX IF NOT EXISTS idx_exams_mode   ON exams(mode)",
+            """
+            CREATE TABLE IF NOT EXISTS exam_answers (
+              id           INTEGER PRIMARY KEY AUTOINCREMENT,
+              exam_id      INTEGER NOT NULL REFERENCES exams(id) ON DELETE CASCADE,
+              question_id  INTEGER,
+              seq          INTEGER NOT NULL,
+              qtype        TEXT    NOT NULL DEFAULT 'unknown',
+              stem         TEXT    NOT NULL DEFAULT '',
+              options_json TEXT    NOT NULL DEFAULT '{}',
+              answer       TEXT    NOT NULL DEFAULT '',
+              analysis     TEXT    NOT NULL DEFAULT '',
+              answer_given TEXT    NOT NULL DEFAULT '',
+              is_correct   INTEGER,
+              answered_at  TEXT,
+              created_at   TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_ea_exam ON exam_answers(exam_id)",
+        ],
+    ),
 ]
 """``[(目标版本号, [幂等 SQL, ...]), ...]``，必须按版本号升序。
 
@@ -67,6 +108,7 @@ v1 是「零 DDL 变更」的基线盖章：只建审计表。后续版本追加
 
 MIGRATION_NOTES: dict[int, str] = {
     1: "v1.3 基线盖章：建 schema_version 审计表，无业务表/列变更",
+    2: "v1.5 练习/模拟考试：新增 exams 与 exam_answers（题目存快照，删题不影响历史试卷）",
 }
 """每个版本的人类可读说明，写入 ``schema_version.note``。"""
 
