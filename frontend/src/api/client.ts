@@ -290,10 +290,79 @@ export interface AuthStatus {
   authenticated: boolean;
 }
 
-/** 登录 / 登出结果。 */
+/** 门禁 / 登出结果。 */
 export interface AuthActionResult {
   /** 门禁是否启用；false 表示后端未设置口令，无需登录。 */
   enabled: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// 练习 / 模拟考试（v1.5，与后端 api/exams.py 字段严格对齐）
+// ---------------------------------------------------------------------------
+export type ExamMode = 'practice' | 'exam';
+
+export type ExamStatus = 'in_progress' | 'finished';
+
+/** 一场练习/考试的元信息。 */
+export interface ExamRecord {
+  id: number;
+  mode: ExamMode;
+  title: string;
+  /** 开考时选择的题库范围（import_files.id 列表；空 = 全部）。 */
+  library_ids: number[];
+  requested_count: number;
+  /** 实际抽到的题数（可能少于请求值）。 */
+  question_count: number;
+  status: ExamStatus;
+  /** 百分制得分（交卷后才有意义）。 */
+  score: number;
+  correct_count: number;
+  answered_count: number;
+  created_at: string;
+  finished_at: string | null;
+}
+
+/** 试卷内的一道题（快照）。 */
+export interface ExamItem {
+  id: number;
+  exam_id: number;
+  /** 原题 id；原题被删后为 null，快照仍可作答。 */
+  question_id: number | null;
+  /** 卷内序号（1 起）。 */
+  seq: number;
+  qtype: QType;
+  stem: string;
+  options: Record<string, string>;
+  /** 我的作答（归一化后的值；未作答为空串）。 */
+  answer_given: string;
+  answered: boolean;
+  /** 以下三项仅在「已交卷」或「练习模式已作答」时由后端返回。 */
+  answer?: string;
+  analysis?: string;
+  is_correct?: boolean | null;
+}
+
+export interface ExamDetail {
+  exam: ExamRecord;
+  items: ExamItem[];
+}
+
+export interface ExamListResult {
+  items: ExamRecord[];
+  total: number;
+  page: number;
+  size: number;
+}
+
+/** 开考请求体。 */
+export interface ExamCreatePayload {
+  mode: ExamMode;
+  /** 题库范围；空数组 = 全部题库。 */
+  library_ids?: number[];
+  /** 请求题数（1–200）。 */
+  count: number;
+  /** 题型筛选；空数组 = 不限。 */
+  qtypes?: QType[];
 }
 
 // ---------------------------------------------------------------------------
@@ -435,6 +504,43 @@ export const api = {
   /** 退出登录（清除会话 Cookie）。 */
   authLogout(): Promise<AuthActionResult> {
     return request(http.post('/auth/logout'));
+  },
+
+  /** 开一场练习/模拟考试（随机抽题并落快照）。 */
+  createExam(payload: ExamCreatePayload): Promise<ExamRecord> {
+    return request(http.post('/exams', payload));
+  },
+
+  /** 练习/考试历史列表。 */
+  listExams(params: { mode?: ExamMode | ''; page?: number; size?: number } = {}): Promise<ExamListResult> {
+    const query: Record<string, string | number> = {
+      page: params.page ?? 1,
+      size: params.size ?? 20,
+    };
+    if (params.mode) {
+      query.mode = params.mode;
+    }
+    return request(http.get('/exams', { params: query }));
+  },
+
+  /** 试卷详情（含全部题目快照）。 */
+  getExam(examId: number): Promise<ExamDetail> {
+    return request(http.get(`/exams/${examId}`));
+  },
+
+  /** 提交单题作答；练习模式返回对错与正确答案。 */
+  submitExamAnswer(examId: number, seq: number, answer: string): Promise<ExamItem> {
+    return request(http.post(`/exams/${examId}/answers`, { seq, answer }));
+  },
+
+  /** 交卷：未答题按错计，统一判分。 */
+  finishExam(examId: number): Promise<ExamRecord> {
+    return request(http.post(`/exams/${examId}/finish`));
+  },
+
+  /** 删除一场练习/考试记录（明细级联删除）。 */
+  deleteExam(examId: number): Promise<{ id: number; deleted: boolean }> {
+    return request(http.delete(`/exams/${examId}`));
   },
 };
 

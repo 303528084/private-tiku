@@ -18,6 +18,8 @@ import AnomalyPage from './pages/AnomalyPage';
 import QuestionDetailPage from './pages/QuestionDetailPage';
 import QuestionCreatePage from './pages/QuestionCreatePage';
 import StatsPage from './pages/StatsPage';
+import PracticeHomePage from './pages/PracticeHomePage';
+import ExamRunPage from './pages/ExamRunPage';
 import { api } from './api/client';
 
 /** 404 兜底页。 */
@@ -123,6 +125,9 @@ export default function App(): JSX.Element {
         }
       >
         <Route path="/" element={<SearchPage />} />
+        {/* 必须排在 /practice/:examId 之前，否则 "history" 之类会被当成 examId */}
+        <Route path="/practice" element={<PracticeHomePage />} />
+        <Route path="/practice/:examId" element={<ExamRunPage />} />
         <Route path="/import" element={<ImportPage />} />
         {/* 兼容旧链接/手误：/imports 不是真实路由，重定向到 /import（v1.4 T05） */}
         <Route path="/imports" element={<Navigate to="/import" replace />} />

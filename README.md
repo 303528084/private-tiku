@@ -101,7 +101,8 @@ frontend/
 3. **搜索**：首页输入关键词（空格分隔多关键词，AND 语义），支持按题型 / 仅看异常 / 来源文档筛选
 4. **手动录题**：`手动录题` 页（`/questions/new`）直接录单题，点字母即可填答案，保存即 `published`；「保存并继续录入」可连录
 5. **校对**：`异常校对` 页按类型筛选，逐题「标记已校对」；点「查看/编辑」直接修改题干、选项、答案、解析，保存后**自动重算异常**
-6. **导出**：`导入统计` 页「导出 Markdown / JSON」
+6. **刷题 / 模拟考试**：`刷题考试` 页（`/practice`）选模式（练习 / 模拟考试）、题库范围、题数（1–200）、题型 → 开考随机抽题（只抽已入库、无未处理异常、题型明确的题）。练习模式答一题判一题并显示解析；模拟考试作答期间不显示答案，交卷统一判分（未答题按错计，百分制）；交卷后逐题回看「我的答案 / 正确答案 / 解析 / 对错」。开考后题目存快照，删除原题不影响进行中/历史试卷
+7. **导出**：`导入统计` 页「导出 Markdown / JSON」
 
 ---
 
@@ -130,11 +131,17 @@ frontend/
 | POST | `/api/auth/login` | 门禁登录 `{"token": "..."}`（`TIKU_ACCESS_TOKEN` 为空时直接返回 `enabled: false`） |
 | POST | `/api/auth/logout` | 退出登录（清除会话 Cookie） |
 | GET | `/api/auth/status` | `{enabled, authenticated}`（前端据此决定是否跳登录页） |
+| POST | `/api/exams` | 开一场练习/考试 `{"mode": "practice\|exam", "library_ids": [], "count": 1–200, "qtypes": []}` → 随机抽题落快照（题数不足按实际可用数开考） |
+| GET | `/api/exams?mode=&page=&size=` | 练习/考试历史列表 |
+| GET | `/api/exams/{id}` | 试卷详情（考试模式作答中不返回答案；练习模式仅已作答题返回；交卷后全部返回） |
+| POST | `/api/exams/{id}/answers` | 提交单题作答 `{"seq": 1, "answer": "B"}`；练习模式返回 `is_correct` + 正确答案 + 解析，考试模式只记录（交卷时判分） |
+| POST | `/api/exams/{id}/finish` | 交卷：未答题按错计，百分制得分 |
+| DELETE | `/api/exams/{id}` | 删除一场记录（作答明细级联删除） |
 
 **错误码**：`0` 成功 · `40001` 参数错误 · `40100` 未登录或会话失效 · `40101` 访问令牌错误 · `40401` 资源不存在 · `42201` 文件类型不支持 · `50001` 解析失败 · `50000` 内部错误。
 HTTP 状态码同步（400/401/404/422/500），响应 body 仍是统一结构（门禁的 401 也返回 `{code, message, data}`，不是 FastAPI 默认的 `{"detail": ...}`）。
 
-枚举：题型 `single|multiple|judge|unknown`；异常 `missing_answer|missing_options|too_few_options|empty_stem|duplicate_number|parse_error`；题目状态 `pending|published`；导入状态 `parsing|pending_confirm|committed|failed`。
+枚举：题型 `single|multiple|judge|unknown`；异常 `missing_answer|missing_options|too_few_options|empty_stem|duplicate_number|parse_error`；题目状态 `pending|published`；导入状态 `parsing|pending_confirm|committed|failed`；练习/考试模式 `practice|exam`；试卷状态 `in_progress|finished`。
 
 ---
 

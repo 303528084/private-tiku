@@ -24,6 +24,7 @@ import ReportProblemIcon from '@mui/icons-material/ReportProblem';
 import BarChartIcon from '@mui/icons-material/BarChart';
 import AddCircleOutlineIcon from '@mui/icons-material/AddCircleOutline';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
+import QuizIcon from '@mui/icons-material/Quiz';
 import LogoutIcon from '@mui/icons-material/Logout';
 import { api, toErrorMessage } from '../api/client';
 import type { StatsResult } from '../api/client';
@@ -40,6 +41,7 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { to: '/', label: '搜索题库', icon: <SearchIcon fontSize="small" /> },
+  { to: '/practice', label: '刷题考试', icon: <QuizIcon fontSize="small" /> },
   { to: '/questions/new', label: '手动录题', icon: <AddCircleOutlineIcon fontSize="small" /> },
   { to: '/import', label: '导入文档', icon: <UploadFileIcon fontSize="small" /> },
   { to: '/anomalies', label: '异常校对', icon: <ReportProblemIcon fontSize="small" /> },
@@ -54,6 +56,9 @@ const NAV_ITEMS: NavItem[] = [
 function currentNavLabel(pathname: string): string {
   if (pathname === '/') {
     return '搜索题库';
+  }
+  if (pathname.startsWith('/practice')) {
+    return '刷题考试';
   }
   if (pathname === '/questions/new') {
     return '手动录题';
